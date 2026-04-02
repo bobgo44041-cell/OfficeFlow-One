@@ -1290,6 +1290,7 @@
     <script>
       (() => {
         const storageKey = "officeflow-one-mvp-state";
+        const adminEmails = ["bobgo44041@gmail.com"];
         const firebaseConfig = {
           apiKey: "AIzaSyBfT58Y9XwjalTk0E0NPBWqkVVVOWN9zFQ",
           authDomain: "officeflow-one.firebaseapp.com",
@@ -1305,6 +1306,7 @@
             authenticated: false,
             email: "",
             provider: "",
+            role: "member",
           },
           authMode: "signin",
           accounts: [],
@@ -1429,6 +1431,16 @@
             statLabel: "오늘 블록",
             icon: createIcon("planner"),
           },
+          {
+            id: "admin",
+            title: "운영자 콘솔",
+            summary: "사용자, 권한, 구독 상태를 점검하는 운영자 전용 관리 화면",
+            why: "운영자는 일반 사용자와 달리 계정과 과금 상태를 관리할 수 있어야 합니다.",
+            premium: false,
+            ownerOnly: true,
+            statLabel: "관리",
+            icon: createIcon("admin"),
+          },
         ];
 
         const routeMap = new Map(appCatalog.map((app) => [app.id, app]));
@@ -1489,10 +1501,12 @@
             const raw = localStorage.getItem(storageKey);
             if (!raw) return structuredClone(defaultState);
             const parsed = JSON.parse(raw);
+            const nextSession = { ...defaultState.session, ...(parsed.session || {}) };
+            nextSession.role = resolveRole(nextSession.email);
             return {
               ...structuredClone(defaultState),
               ...parsed,
-              session: { ...defaultState.session, ...(parsed.session || {}) },
+              session: nextSession,
               authMode: parsed.authMode || defaultState.authMode,
               accounts: Array.isArray(parsed.accounts) ? parsed.accounts : defaultState.accounts,
               subscription: { ...defaultState.subscription, ...(parsed.subscription || {}) },
@@ -1514,6 +1528,10 @@
 
         function saveState() {
           localStorage.setItem(storageKey, JSON.stringify(state));
+        }
+
+        function resolveRole(email) {
+          return adminEmails.includes(String(email || "").toLowerCase()) ? "owner" : "member";
         }
 
         function initFirebaseServices() {
@@ -1568,10 +1586,12 @@
         function canAccess(appId) {
           const app = routeMap.get(appId);
           if (!app) return false;
+          if (app.ownerOnly && state.session.role !== "owner") return false;
           return !app.premium || isPremiumEnabled();
         }
 
         function render() {
+          state.session.role = resolveRole(state.session.email);
           const authenticated = state.session.authenticated;
           elements.authScreen.hidden = authenticated;
           elements.workspaceScreen.hidden = !authenticated;
@@ -1601,7 +1621,10 @@
           const userChip = document.createElement("button");
           userChip.type = "button";
           userChip.className = "button-secondary";
-          userChip.textContent = state.session.email + " · " + state.session.provider;
+          userChip.textContent =
+            state.session.email +
+            " · " +
+            (state.session.role === "owner" ? "운영자" : "일반 사용자");
           userChip.addEventListener("click", () => {
             pushToast("로그인 상태", state.session.provider + " 계정으로 로그인되어 있습니다.");
           });
@@ -1707,6 +1730,7 @@
           if (state.navigation.current === "approvals") renderApprovalsApp();
           if (state.navigation.current === "docs") renderDocsApp();
           if (state.navigation.current === "planner") renderPlannerApp();
+          if (state.navigation.current === "admin") renderAdminApp();
         }
 
         function renderDashboard() {
@@ -1751,10 +1775,18 @@
           title.textContent = app.title;
 
           const summary = document.createElement("p");
-          summary.textContent = app.premium && !isPremiumEnabled() ? "구독 후 사용 가능" : "클릭해서 열기";
+          if (app.ownerOnly && state.session.role !== "owner") {
+            summary.textContent = "운영자 전용";
+          } else {
+            summary.textContent = app.premium && !isPremiumEnabled() ? "구독 후 사용 가능" : "클릭해서 열기";
+          }
 
           button.append(iconBox, badge, title, summary);
           button.addEventListener("click", () => {
+            if (app.ownerOnly && state.session.role !== "owner") {
+              pushToast("접근 제한", "운영자 계정만 접근할 수 있습니다.");
+              return;
+            }
             if (app.premium && !isPremiumEnabled()) {
               openBillingModal();
               pushToast("구독 필요", app.title + "은 월구독이 필요한 프리미엄 앱입니다.");
@@ -2597,6 +2629,152 @@
           return wrapper;
         }
 
+        function renderAdminApp() {
+          const wrapper = createAppScaffold(
+            "운영자 콘솔",
+            "사용자 계정과 현재 구독 상태를 관리하는 운영자 전용 화면입니다."
+          );
+
+          const layout = document.createElement("div");
+          layout.className = "approval-layout";
+
+          const top = document.createElement("div");
+          top.className = "tool-grid";
+          top.append(createAdminSummaryCard(), createAdminActionsCard());
+
+          const usersCard = document.createElement("section");
+          usersCard.className = "app-panel";
+          const title = document.createElement("h3");
+          title.textContent = "가입 사용자";
+          const list = document.createElement("div");
+          list.className = "simple-list";
+
+          const accounts = buildAccountRows();
+          if (accounts.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "empty-state";
+            empty.textContent = "등록된 사용자가 없습니다.";
+            list.appendChild(empty);
+          } else {
+            accounts.forEach((account) => list.appendChild(createAdminUserItem(account)));
+          }
+
+          usersCard.append(title, list);
+          layout.append(top, usersCard);
+          wrapper.appendChild(layout);
+          elements.viewContainer.appendChild(wrapper);
+        }
+
+        function createAdminSummaryCard() {
+          const card = document.createElement("section");
+          card.className = "surface-card";
+          const title = document.createElement("h3");
+          title.textContent = "운영 지표";
+          const list = document.createElement("div");
+          list.className = "simple-list";
+          const accounts = buildAccountRows();
+          list.append(
+            createSimpleItem("총 사용자", accounts.length + "명"),
+            createSimpleItem("운영자", accounts.filter((account) => account.role === "owner").length + "명"),
+            createSimpleItem("현재 구독", isPremiumEnabled() ? "Professional 활성" : "Free Preview")
+          );
+          card.append(title, list);
+          return card;
+        }
+
+        function createAdminActionsCard() {
+          const card = document.createElement("section");
+          card.className = "surface-card";
+          const title = document.createElement("h3");
+          title.textContent = "운영 액션";
+          const actions = document.createElement("div");
+          actions.className = "simple-list";
+
+          const promote = document.createElement("button");
+          promote.type = "button";
+          promote.className = "button-secondary";
+          promote.textContent = "내 계정 운영자 재확인";
+          promote.addEventListener("click", () => {
+            setState((prev) => ({
+              ...prev,
+              session: {
+                ...prev.session,
+                role: resolveRole(prev.session.email),
+              },
+            }));
+            pushToast("운영자 상태", "현재 계정의 운영자 권한을 다시 확인했습니다.");
+          });
+
+          const toggleBilling = document.createElement("button");
+          toggleBilling.type = "button";
+          toggleBilling.className = "button";
+          toggleBilling.textContent = isPremiumEnabled() ? "구독 비활성화" : "구독 활성화";
+          toggleBilling.addEventListener("click", () => {
+            if (isPremiumEnabled()) {
+              deactivateSubscriptionDemo();
+            } else {
+              activateSubscriptionDemo();
+            }
+          });
+
+          actions.append(promote, toggleBilling);
+          card.append(title, actions);
+          return card;
+        }
+
+        function buildAccountRows() {
+          const map = new Map();
+          state.accounts.forEach((account) => {
+            const email = String(account.email || "").toLowerCase();
+            if (!email) return;
+            map.set(email, {
+              email,
+              provider: account.provider,
+              role: resolveRole(email),
+            });
+          });
+          if (state.session.email) {
+            const email = state.session.email.toLowerCase();
+            if (!map.has(email)) {
+              map.set(email, {
+                email,
+                provider: state.session.provider,
+                role: resolveRole(email),
+              });
+            }
+          }
+          return [...map.values()].sort((a, b) => a.email.localeCompare(b.email));
+        }
+
+        function createAdminUserItem(account) {
+          const item = document.createElement("article");
+          item.className = "approval-item";
+
+          const content = document.createElement("div");
+          const email = document.createElement("p");
+          email.className = "approval-title";
+          email.textContent = account.email;
+          const meta = document.createElement("div");
+          meta.className = "approval-meta";
+          meta.append(
+            createChip(account.provider === "email" ? "이메일 가입" : account.provider || "소셜"),
+            createChip(account.role === "owner" ? "운영자" : "일반 사용자")
+          );
+          content.append(email, meta);
+
+          const actions = document.createElement("div");
+          actions.className = "approval-actions";
+          const roleButton = document.createElement("button");
+          roleButton.type = "button";
+          roleButton.className = "small-button";
+          roleButton.textContent = account.role === "owner" ? "운영자 계정" : "일반 계정";
+          roleButton.disabled = true;
+          actions.appendChild(roleButton);
+
+          item.append(content, actions);
+          return item;
+        }
+
         function handleEmailLogin(event) {
           event.preventDefault();
           const email = elements.emailInput.value.trim().toLowerCase();
@@ -2634,6 +2812,7 @@
                 authenticated: true,
                 email,
                 provider: "Email Signup",
+                role: resolveRole(email),
               },
               navigation: {
                 current: "dashboard",
@@ -2658,7 +2837,8 @@
             session: {
               authenticated: true,
               email,
-              provider: "Email Demo",
+              provider: "Email Login",
+              role: resolveRole(email),
             },
             navigation: {
               current: "dashboard",
@@ -2705,6 +2885,7 @@
                 authenticated: true,
                 email: nextEmail,
                 provider: "Google OAuth",
+                role: resolveRole(nextEmail),
               },
               navigation: {
                 current: "dashboard",
@@ -2735,6 +2916,7 @@
               authenticated: false,
               email: "",
               provider: "",
+              role: "member",
             },
             navigation: {
               current: "dashboard",
@@ -3044,6 +3226,10 @@
           if (type === "planner") {
             shapes.push(["rect", { x: 4, y: 5, width: 16, height: 15, rx: 2 }]);
             shapes.push(["path", { d: "M8 3v4M16 3v4M4 10h16M9 14h2v3H9zM13 14h2M13 17h2" }]);
+          }
+          if (type === "admin") {
+            shapes.push(["path", { d: "M12 3 4 7v5c0 5 3.5 7.7 8 9 4.5-1.3 8-4 8-9V7l-8-4Z" }]);
+            shapes.push(["path", { d: "M9.5 12a2.5 2.5 0 1 1 5 0a2.5 2.5 0 0 1-5 0ZM7.5 17a4.5 4.5 0 0 1 9 0" }]);
           }
 
           shapes.forEach(([tag, attrs]) => {
