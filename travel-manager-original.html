@@ -180,7 +180,8 @@
                 getStorage, ref, uploadBytes, uploadString, getDownloadURL, deleteObject, getAnalytics } = window.firebaseModules;
 
         // [수정됨] 하이브리드 설정 적용
-        const OFFICEFLOW_STORAGE_KEY = 'officeflow-one-mvp-state';
+        const OFFICEFLOW_STORAGE_KEY = 'officeflow-one-embed-session';
+        const LEGACY_OFFICEFLOW_STORAGE_KEY = 'officeflow-one-mvp-state';
         const officeflowFirebaseConfig = {
             apiKey: "AIzaSyBfT58Y9XwjalTk0E0NPBWqkVVVOWN9zFQ",
             authDomain: "officeflow-one.firebaseapp.com",
@@ -194,9 +195,8 @@
         function readOfficeFlowState() {
             try {
                 const raw =
-                    window.parent && window.parent !== window
-                        ? window.parent.localStorage.getItem(OFFICEFLOW_STORAGE_KEY)
-                        : localStorage.getItem(OFFICEFLOW_STORAGE_KEY);
+                    localStorage.getItem(OFFICEFLOW_STORAGE_KEY) ||
+                    localStorage.getItem(LEGACY_OFFICEFLOW_STORAGE_KEY);
                 return raw ? JSON.parse(raw) : null;
             } catch (error) {
                 console.warn('OfficeFlow state unavailable', error);
@@ -414,7 +414,7 @@
                                 await signInWithCustomToken(auth, window.__initial_auth_token);
                                 return;
                             } catch (err) {
-                                console.warn("Token mismatch, fallback to anonymous:", err);
+                                console.warn("Token mismatch, OfficeFlow session reuse failed:", err);
                             }
                         }
                         if (officeflowEmail) {

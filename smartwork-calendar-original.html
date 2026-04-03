@@ -122,12 +122,12 @@
 
         // --- Critical Path & Auth Logic ---
         
+        const OFFICEFLOW_EMBED_SESSION_KEY = 'officeflow-one-embed-session';
         const readOfficeFlowSession = () => {
             try {
                 const raw =
-                    window.parent && window.parent !== window
-                        ? window.parent.localStorage.getItem('officeflow-one-mvp-state')
-                        : localStorage.getItem('officeflow-one-mvp-state');
+                    localStorage.getItem(OFFICEFLOW_EMBED_SESSION_KEY) ||
+                    localStorage.getItem('officeflow-one-mvp-state');
                 return raw ? JSON.parse(raw) : null;
             } catch (error) {
                 console.warn("[OfficeFlow] Session read failed:", error);

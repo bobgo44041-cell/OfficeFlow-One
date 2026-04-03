@@ -96,9 +96,9 @@
         function App() {
             const getScopedStorageKey = () => {
                 try {
-                    const parentState = window.parent && window.parent !== window
-                        ? window.parent.localStorage.getItem('officeflow-one-mvp-state')
-                        : localStorage.getItem('officeflow-one-mvp-state');
+                    const parentState =
+                        localStorage.getItem('officeflow-one-embed-session') ||
+                        localStorage.getItem('officeflow-one-mvp-state');
                     if (parentState) {
                         const parsed = JSON.parse(parentState);
                         const email = String(parsed?.session?.email || '').toLowerCase().trim();

@@ -128,12 +128,13 @@
         serverTimestamp,
         setDoc,
       } = window.FB || {};
+      const OFFICEFLOW_EMBED_SESSION_KEY = "officeflow-one-embed-session";
+      const LEGACY_OFFICEFLOW_STORAGE_KEY = "officeflow-one-mvp-state";
       const readOfficeFlowSession = () => {
         try {
           const raw =
-            window.parent && window.parent !== window
-              ? window.parent.localStorage.getItem("officeflow-one-mvp-state")
-              : localStorage.getItem("officeflow-one-mvp-state");
+            localStorage.getItem(OFFICEFLOW_EMBED_SESSION_KEY) ||
+            localStorage.getItem(LEGACY_OFFICEFLOW_STORAGE_KEY);
           return raw ? JSON.parse(raw) : null;
         } catch (error) {
           console.warn("OfficeFlow session read failed:", error);
@@ -141,6 +142,7 @@
         }
       };
       const officeFlowSession = readOfficeFlowSession();
+      const officeFlowAuthenticated = Boolean(officeFlowSession?.session?.authenticated);
       const officeFlowUid = String(officeFlowSession?.session?.uid || "").trim();
       const officeFlowEmail = String(officeFlowSession?.session?.email || "")
         .toLowerCase()
@@ -356,9 +358,7 @@
         if (!window.FB)
           return <div className="flex h-screen items-center justify-center text-slate-500 font-medium">클라우드 연결중...</div>;
 
-        const [isAuthenticated, setIsAuthenticated] = useState(Boolean(officeFlowEmail));
-        const [passwordInput, setPasswordInput] = useState("");
-        const [globalSettings, setGlobalSettings] = useState({ adminPassword: "admin1234" });
+        const [isAuthenticated] = useState(Boolean(officeFlowAuthenticated && officeFlowEmail));
 
         const [user, setUser] = useState(null);
         const [activeTab, setActiveTab] = useState("dashboard");
@@ -407,10 +407,6 @@
         const [uploadType, setUploadType] = useState(null);
 
         useEffect(() => {
-          if (officeFlowEmail) {
-            setIsAuthenticated(true);
-          }
-
           let didResolveAuth = false;
           const loadingTimeout = window.setTimeout(() => {
             setLoading(false);
@@ -449,20 +445,6 @@
 
         useEffect(() => {
           if (!user) return;
-          const unsubSet = onSnapshot(
-            doc(db, "artifacts", appId, "public", "data", "settings", "config"),
-            (s) => {
-              if (s.exists()) setGlobalSettings(s.data());
-              else
-                setDoc(doc(db, "artifacts", appId, "public", "data", "settings", "config"), {
-                  adminPassword: "admin1234",
-                });
-            },
-            (error) => {
-              console.error("Settings snapshot error:", error);
-              setCloudError("설정 데이터를 불러오지 못했습니다.");
-            }
-          );
           const unsubIns = onSnapshot(
             collection(db, "artifacts", appId, "public", "data", "insurances"),
             (s) => setInsurances(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
@@ -538,7 +520,6 @@
             }
           );
           return () => {
-            unsubSet();
             unsubIns();
             unsubVeh();
             unsubAcc();
@@ -547,29 +528,6 @@
             unsubPartners();
           };
         }, [user]);
-
-        const handleLogin = (e) => {
-          e.preventDefault();
-          if (officeFlowEmail) {
-            setIsAuthenticated(true);
-            return;
-          }
-          if (passwordInput === globalSettings.adminPassword) setIsAuthenticated(true);
-          else alert("비밀번호 불일치");
-        };
-
-        const handlePasswordChange = async (e) => {
-          e.preventDefault();
-          if (formData.newPassword !== formData.confirmPassword) return alert("비밀번호 불일치");
-          await setDoc(
-            doc(db, "artifacts", appId, "public", "data", "settings", "config"),
-            { adminPassword: formData.newPassword },
-            { merge: true }
-          );
-          alert("변경 완료");
-          setIsModalOpen(false);
-          setFormData({});
-        };
 
         const handleSave = async (e) => {
           e.preventDefault();
@@ -1195,27 +1153,10 @@
                     {user ? "클라우드 연동됨" : "클라우드 연결중"}
                   </div>
                 </div>
-                <form onSubmit={handleLogin} className="p-8 space-y-6">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">비밀번호</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-3 text-gray-400">
-                        <Icon name="lock" size={20} />
-                      </span>
-                      <input
-                        type="password"
-                        className="w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                        value={passwordInput}
-                        onChange={(e) => setPasswordInput(e.target.value)}
-                        autoFocus
-                        placeholder="비밀번호를 입력하세요"
-                      />
-                    </div>
-                  </div>
-                  <button className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-lg flex justify-center gap-2 items-center">
-                    <Icon name="log-in" size={20} /> 접속
-                  </button>
-                </form>
+                <div className="p-8 space-y-4 text-sm text-slate-600">
+                  <p>이 앱은 별도 관리자 비밀번호를 사용하지 않습니다.</p>
+                  <p>OfficeFlow 메인 앱에서 Google 로그인 후 다시 열어주세요.</p>
+                </div>
               </div>
             </div>
           );
@@ -1285,17 +1226,6 @@
                   />
                   <span>{cloudError ? "클라우드 오류" : user ? "클라우드 연동됨" : "클라우드 연결중"}</span>
                 </div>
-                {!officeFlowEmail && (
-                  <button
-                    onClick={() => {
-                      setModalType("password");
-                      setIsModalOpen(true);
-                    }}
-                    className="mt-3 w-full flex items-center gap-2 px-4 py-2 text-sm text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
-                  >
-                    <Icon name="settings" size={16} /> 설정 (비밀번호)
-                  </button>
-                )}
               </div>
             </aside>
 
@@ -2517,29 +2447,25 @@
                     <h3 className="font-bold flex items-center gap-2">
                       <Icon
                         name={
-                          modalType === "password"
-                            ? "key"
-                            : modalType === "costDetail"
-                              ? "file-text"
-                              : modalType === "insuranceHistory"
-                                ? "history"
-                                : editId
-                                  ? "edit"
-                                  : "plus"
+                          modalType === "costDetail"
+                            ? "file-text"
+                            : modalType === "insuranceHistory"
+                              ? "history"
+                              : editId
+                                ? "edit"
+                                : "plus"
                         }
                         size={18}
                       />
-                      {modalType === "password"
-                        ? "비밀번호 변경"
-                        : modalType === "costDetail"
-                          ? "사고 비용 상세"
-                          : modalType === "insuranceHistory"
-                            ? "피보험물 보험 이력"
-                            : modalType === "insuranceRenew"
-                              ? "보험 갱신 등록"
-                              : editId
-                                ? "정보 수정"
-                                : "신규 등록"}
+                      {modalType === "costDetail"
+                        ? "사고 비용 상세"
+                        : modalType === "insuranceHistory"
+                          ? "피보험물 보험 이력"
+                          : modalType === "insuranceRenew"
+                            ? "보험 갱신 등록"
+                            : editId
+                              ? "정보 수정"
+                              : "신규 등록"}
                     </h3>
                     <button
                       onClick={() => {
@@ -2550,31 +2476,7 @@
                       <Icon name="x" />
                     </button>
                   </div>
-                  {modalType === "password" ? (
-                    <form onSubmit={handlePasswordChange} className="p-6 space-y-4">
-                      <input
-                        type="password"
-                        placeholder="새 비밀번호"
-                        className="w-full border p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                        value={formData.newPassword || ""}
-                        onChange={(e) => setFormData({ ...formData, newPassword: e.target.value })}
-                        required
-                      />
-                      <input
-                        type="password"
-                        placeholder="비밀번호 확인"
-                        className="w-full border p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                        value={formData.confirmPassword || ""}
-                        onChange={(e) =>
-                          setFormData({ ...formData, confirmPassword: e.target.value })
-                        }
-                        required
-                      />
-                      <button className="w-full bg-slate-800 text-white py-3 rounded-lg font-bold">
-                        변경 저장
-                      </button>
-                    </form>
-                  ) : modalType === "costDetail" ? (
+                  {modalType === "costDetail" ? (
                     <div className="p-6">
                       <div className="space-y-4 text-sm">
                         <div className="flex justify-between p-3 bg-gray-50 rounded-lg">

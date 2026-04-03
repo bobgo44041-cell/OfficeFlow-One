@@ -1,0 +1,16 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function ownsTravelApp(appId) {
+      return signedIn() && appId.matches('^ofw-travel-manager-' + request.auth.uid + '$');
+    }
+
+    match /artifacts/{appId}/trip_docs/{documentPath=**} {
+      allow read, write: if ownsTravelApp(appId);
+    }
+  }
+}

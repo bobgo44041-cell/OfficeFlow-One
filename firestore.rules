@@ -19,9 +19,18 @@ service cloud.firestore {
     }
 
     match /ofw_board_posts/{postId} {
-      allow read: if signedIn();
-      allow create: if signedIn();
-      allow update, delete: if isAdmin() || (
+      allow read: if signedIn() && (
+        !resource.data.isPrivate ||
+        isAdmin() ||
+        resource.data.authorEmail == request.auth.token.email
+      );
+      allow create: if signedIn() && request.resource.data.authorEmail == request.auth.token.email;
+      allow update: if isAdmin() || (
+        signedIn() &&
+        resource.data.authorEmail == request.auth.token.email &&
+        request.resource.data.authorEmail == request.auth.token.email
+      );
+      allow delete: if isAdmin() || (
         signedIn() &&
         resource.data.authorEmail == request.auth.token.email
       );

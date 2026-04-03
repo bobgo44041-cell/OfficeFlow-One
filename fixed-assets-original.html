@@ -136,7 +136,8 @@
             check();
         });
 
-        const OFFICEFLOW_STORAGE_KEY = 'officeflow-one-mvp-state';
+        const OFFICEFLOW_STORAGE_KEY = 'officeflow-one-embed-session';
+        const LEGACY_OFFICEFLOW_STORAGE_KEY = 'officeflow-one-mvp-state';
         const officeflowFirebaseConfig = {
             apiKey: "AIzaSyBfT58Y9XwjalTk0E0NPBWqkVVVOWN9zFQ",
             authDomain: "officeflow-one.firebaseapp.com",
@@ -149,9 +150,8 @@
         function getOfficeFlowState() {
             try {
                 const raw =
-                    window.parent && window.parent !== window
-                        ? window.parent.localStorage.getItem(OFFICEFLOW_STORAGE_KEY)
-                        : localStorage.getItem(OFFICEFLOW_STORAGE_KEY);
+                    localStorage.getItem(OFFICEFLOW_STORAGE_KEY) ||
+                    localStorage.getItem(LEGACY_OFFICEFLOW_STORAGE_KEY);
                 return raw ? JSON.parse(raw) : null;
             } catch (error) {
                 console.warn('OfficeFlow state unavailable', error);

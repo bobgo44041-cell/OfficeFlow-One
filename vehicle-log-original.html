@@ -40,7 +40,8 @@
     <div id="root"></div>
 
     <script>
-        const OFFICEFLOW_STORAGE_KEY = 'officeflow-one-mvp-state';
+        const OFFICEFLOW_STORAGE_KEY = 'officeflow-one-embed-session';
+        const LEGACY_OFFICEFLOW_STORAGE_KEY = 'officeflow-one-mvp-state';
         const officeflowFirebaseConfig = {
             apiKey: "AIzaSyBfT58Y9XwjalTk0E0NPBWqkVVVOWN9zFQ",
             authDomain: "officeflow-one.firebaseapp.com",
@@ -53,14 +54,9 @@
 
         function getOfficeFlowState() {
             try {
-                if (window.parent && window.parent !== window) {
-                    const raw = window.parent.localStorage.getItem(OFFICEFLOW_STORAGE_KEY);
-                    if (raw) return JSON.parse(raw);
-                }
-            } catch (error) {}
-
-            try {
-                const raw = window.localStorage.getItem(OFFICEFLOW_STORAGE_KEY);
+                const raw =
+                    window.localStorage.getItem(OFFICEFLOW_STORAGE_KEY) ||
+                    window.localStorage.getItem(LEGACY_OFFICEFLOW_STORAGE_KEY);
                 if (raw) return JSON.parse(raw);
             } catch (error) {}
 
