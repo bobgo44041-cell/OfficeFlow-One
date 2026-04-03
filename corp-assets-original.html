@@ -1,0 +1,2990 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Corp.Manager - 기업 자산 통합 관리</title>
+
+    <!-- FAVICON -->
+    <link rel="icon" type="image/svg+xml" href="assets/cute-coding-robot-icon.svg" />
+
+    <!-- 1. Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 2. React & ReactDOM (UMD) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+    <!-- 3. Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- 4. Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- 5. Firebase SDK -->
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+      import {
+        getAuth,
+        onAuthStateChanged,
+      } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+      import {
+        getFirestore,
+        collection,
+        addDoc,
+        deleteDoc,
+        updateDoc,
+        doc,
+        onSnapshot,
+        serverTimestamp,
+        setDoc,
+      } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+      import { getAnalytics } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-analytics.js";
+
+      const firebaseConfig = {
+        apiKey: "AIzaSyBfT58Y9XwjalTk0E0NPBWqkVVVOWN9zFQ",
+        authDomain: "officeflow-one.firebaseapp.com",
+        projectId: "officeflow-one",
+        storageBucket: "officeflow-one.firebasestorage.app",
+        messagingSenderId: "1084176732785",
+        appId: "1:1084176732785:web:56e241ddcdb69afdf101d0",
+        measurementId: "G-SYP4NQMGP7",
+      };
+
+      const app = initializeApp(firebaseConfig);
+
+      // 전역 객체에 Firebase 모듈 할당 (React에서 사용하기 위함)
+      window.FB = {
+        app,
+        analytics: getAnalytics(app),
+        auth: getAuth(app),
+        db: getFirestore(app),
+        onAuthStateChanged,
+        collection,
+        addDoc,
+        deleteDoc,
+        updateDoc,
+        doc,
+        onSnapshot,
+        serverTimestamp,
+        setDoc,
+      };
+    </script>
+
+    <style>
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .animate-fade-in {
+        animation: fadeIn 0.3s ease-out forwards;
+      }
+      .animate-fade-in-up {
+        animation: fadeIn 0.4s ease-out forwards;
+      }
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #f1f5f9;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
+      }
+      .bar-grow {
+        transition: width 1s ease-in-out;
+      }
+    </style>
+  </head>
+  <body class="bg-slate-100 text-slate-800 font-sans overflow-hidden">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useState, useEffect, useMemo, useRef } = React;
+      const { createRoot } = ReactDOM;
+
+      // Firebase modules from window
+      const {
+        auth,
+        db,
+        onAuthStateChanged,
+        collection,
+        addDoc,
+        deleteDoc,
+        updateDoc,
+        doc,
+        onSnapshot,
+        serverTimestamp,
+        setDoc,
+      } = window.FB || {};
+      const readOfficeFlowSession = () => {
+        try {
+          const raw =
+            window.parent && window.parent !== window
+              ? window.parent.localStorage.getItem("officeflow-one-mvp-state")
+              : localStorage.getItem("officeflow-one-mvp-state");
+          return raw ? JSON.parse(raw) : null;
+        } catch (error) {
+          console.warn("OfficeFlow session read failed:", error);
+          return null;
+        }
+      };
+      const officeFlowSession = readOfficeFlowSession();
+      const officeFlowUid = String(officeFlowSession?.session?.uid || "").trim();
+      const officeFlowEmail = String(officeFlowSession?.session?.email || "")
+        .toLowerCase()
+        .trim();
+      const officeFlowKey = (officeFlowUid || officeFlowEmail).replace(/[^a-z0-9]/gi, "_");
+      const appId = officeFlowKey
+        ? `ofw-corp-assets-${officeFlowKey}`
+        : "ofw-corp-assets-guest";
+
+      // Icon Helper Component (Lucide)
+      const Icon = ({ name, size = 20, className = "" }) => {
+        const iRef = useRef(null);
+        useEffect(() => {
+          if (window.lucide && iRef.current) {
+            window.lucide.createIcons({
+              root: iRef.current,
+              name: name,
+              attrs: { width: size, height: size, class: className },
+            });
+          }
+        }, [name, size, className]);
+        return <i ref={iRef} data-lucide={name} className="inline-flex"></i>;
+      };
+
+      // --- Helpers ---
+      const formatCurrency = (amount) =>
+        new Intl.NumberFormat("ko-KR", { style: "currency", currency: "KRW" }).format(amount);
+      const parseLocalDate = (value) => {
+        const date = normalizeDateInput(value);
+        if (!date) return null;
+        const [y, m, d] = date.split("-").map(Number);
+        if (!y || !m || !d) return null;
+        return new Date(y, m - 1, d);
+      };
+      const formatDate = (dateString) => {
+        const date = parseLocalDate(dateString);
+        return date ? date.toLocaleDateString("ko-KR") : "-";
+      };
+      const getDaysDifference = (targetDate) => {
+        const target = parseLocalDate(targetDate);
+        if (!target) return null;
+        const today = new Date();
+        const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        return Math.ceil((target - todayLocal) / (1000 * 60 * 60 * 24));
+      };
+      const formatDday = (targetDate) => {
+        const days = getDaysDifference(targetDate);
+        return days === null ? "-" : `D-${days}`;
+      };
+      const normalizeText = (v) => String(v ?? "").trim();
+      const parseNumberSafe = (v) => {
+        const n = Number(
+          String(v ?? "")
+            .replace(/,/g, "")
+            .trim()
+        );
+        return Number.isFinite(n) ? n : 0;
+      };
+      const normalizeDateInput = (v) => {
+        const s = normalizeText(v);
+        if (!s) return "";
+        const replaced = s.replace(/[.\/]/g, "-").replace(/\s+/g, "");
+        const ymd = replaced.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+        if (ymd)
+          return `${ymd[1]}-${String(ymd[2]).padStart(2, "0")}-${String(ymd[3]).padStart(2, "0")}`;
+        const dt = new Date(s);
+        if (Number.isNaN(dt.getTime())) return "";
+        return dt.toISOString().slice(0, 10);
+      };
+      const getYearSafe = (dateValue) => {
+        const d = normalizeDateInput(dateValue);
+        if (!d) return null;
+        const year = Number(d.slice(0, 4));
+        return Number.isFinite(year) ? year : null;
+      };
+      const getInsuranceGroupKey = (item) =>
+        normalizeText(item?.renewalGroupId) ||
+        [
+          normalizeText(item?.type),
+          normalizeText(item?.company),
+          normalizeText(item?.name),
+          normalizeText(item?.insuredObject),
+        ].join("|");
+      const sanitizeLink = (value) => {
+        const link = normalizeText(value);
+        if (!link) return "";
+        const lower = link.toLowerCase();
+        if (
+          lower.startsWith("javascript:") ||
+          lower.startsWith("data:") ||
+          lower.startsWith("vbscript:")
+        ) {
+          return "";
+        }
+        return link;
+      };
+
+      // --- CSV Functions ---
+      const downloadCSV = (data, type) => {
+        if (!data || data.length === 0) {
+          alert("데이터 없음");
+          return;
+        }
+        let headers = [],
+          mapRow = null;
+
+        if (type === "insurances") {
+          headers = ["종류", "보험사", "증권명", "피보험물", "시작일", "만기일", "금액"];
+          mapRow = (i) => [
+            i.type,
+            i.company,
+            i.name,
+            i.insuredObject || "",
+            i.startDate,
+            i.endDate,
+            i.amount,
+          ];
+        } else if (type === "vehicles") {
+          headers = ["차량번호", "모델", "소유형태", "업체명", "운전자", "만기일", "월비용"];
+          mapRow = (i) => [
+            i.plateNumber,
+            i.model,
+            i.ownershipType,
+            i.provider || "",
+            i.driver,
+            i.contractEnd,
+            i.monthlyCost,
+          ];
+        } else if (type === "accidents") {
+          headers = [
+            "발생일",
+            "차량번호",
+            "운전자",
+            "내용",
+            "수리비",
+            "대인배상",
+            "대물배상",
+            "자차부담금",
+            "총비용",
+            "보험처리여부",
+          ];
+          mapRow = (i) => [
+            i.date,
+            i.plateNumber,
+            i.driver,
+            i.description,
+            i.repairCost || 0,
+            i.insurancePerson || 0,
+            i.insuranceProperty || 0,
+            i.deductible || 0,
+            i.totalCost || 0,
+            i.insuranceClaimed,
+          ];
+        }
+
+        const csvContent = [
+          headers.join(","),
+          ...data.map((item) =>
+            mapRow(item)
+              .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+              .join(",")
+          ),
+        ].join("\n");
+        const blob = new Blob(["\ufeff" + csvContent], { type: "text/csv;charset=utf-8;" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `${type}_export_${new Date().toISOString().slice(0, 10)}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      };
+
+      const parseCSVLine = (line) => {
+        const values = [];
+        let cur = "";
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') {
+            if (inQuotes && line[i + 1] === '"') {
+              cur += '"';
+              i++;
+            } else {
+              inQuotes = !inQuotes;
+            }
+          } else if (ch === "," && !inQuotes) {
+            values.push(cur);
+            cur = "";
+          } else {
+            cur += ch;
+          }
+        }
+        values.push(cur);
+        return values.map((v) => v.trim());
+      };
+      const parseCSV = (text) => {
+        const cleaned = String(text || "").replace(/^\uFEFF/, "");
+        const lines = cleaned.split(/\r?\n/).filter((line) => line.trim() !== "");
+        if (!lines.length) return [];
+        const headers = parseCSVLine(lines[0]).map((h) => h.replace(/^"|"$/g, "").trim());
+        return lines.slice(1).map((line) => {
+          const values = parseCSVLine(line).map((v) => v.replace(/^"|"$/g, "").replace(/""/g, '"'));
+          return headers.reduce((obj, header, index) => {
+            obj[header] = values[index] ?? "";
+            return obj;
+          }, {});
+        });
+      };
+
+      // --- App Component ---
+      function App() {
+        // Firebase가 로드되기 전이면 대기
+        if (!window.FB)
+          return <div className="flex h-screen items-center justify-center text-slate-500 font-medium">클라우드 연결중...</div>;
+
+        const [isAuthenticated, setIsAuthenticated] = useState(Boolean(officeFlowEmail));
+        const [passwordInput, setPasswordInput] = useState("");
+        const [globalSettings, setGlobalSettings] = useState({ adminPassword: "admin1234" });
+
+        const [user, setUser] = useState(null);
+        const [activeTab, setActiveTab] = useState("dashboard");
+        const [dashboardYear, setDashboardYear] = useState(new Date().getFullYear());
+
+        const [insurances, setInsurances] = useState([]);
+        const [vehicles, setVehicles] = useState([]);
+        const [accidents, setAccidents] = useState([]);
+        const [claims, setClaims] = useState([]);
+        const [documents, setDocuments] = useState([]);
+        const [partners, setPartners] = useState([]);
+        const [loading, setLoading] = useState(true);
+        const [cloudError, setCloudError] = useState("");
+        const [listKeyword, setListKeyword] = useState("");
+        const [listDateFrom, setListDateFrom] = useState("");
+        const [listDateTo, setListDateTo] = useState("");
+        const [listSort, setListSort] = useState("date_desc");
+
+        const [isModalOpen, setIsModalOpen] = useState(false);
+        const [modalType, setModalType] = useState(null);
+        const [formData, setFormData] = useState({});
+        const [editId, setEditId] = useState(null);
+        const [renewSource, setRenewSource] = useState(null);
+        const [documentForm, setDocumentForm] = useState({
+          category: "보험증권",
+          title: "",
+          relatedType: "",
+          relatedKey: "",
+          link: "",
+          memo: "",
+        });
+        const [partnerForm, setPartnerForm] = useState({
+          category: "보험사",
+          name: "",
+          contact: "",
+          manager: "",
+          phone: "",
+          note: "",
+        });
+        const [claimDrafts, setClaimDrafts] = useState({});
+        const [claimsFilterStatus, setClaimsFilterStatus] = useState("전체");
+        const [claimsKeyword, setClaimsKeyword] = useState("");
+
+        const fileInputRef = useRef(null);
+        const uploadTypeRef = useRef(null);
+        const [uploadType, setUploadType] = useState(null);
+
+        useEffect(() => {
+          if (officeFlowEmail) {
+            setIsAuthenticated(true);
+          }
+
+          let didResolveAuth = false;
+          const loadingTimeout = window.setTimeout(() => {
+            setLoading(false);
+            setCloudError((prev) => prev || "클라우드 연결이 지연되고 있습니다.");
+          }, 4000);
+
+          const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
+            didResolveAuth = true;
+            setUser(nextUser);
+            if (nextUser) {
+              window.clearTimeout(loadingTimeout);
+            }
+          });
+
+          if (!auth.currentUser && officeFlowEmail) {
+            window.setTimeout(() => {
+              if (!didResolveAuth && !auth.currentUser) {
+                setCloudError("OfficeFlow 인증 세션을 아직 확인하지 못했습니다.");
+                setLoading(false);
+              }
+            }, 2500);
+          } else if (!auth.currentUser) {
+            window.setTimeout(() => {
+              if (!didResolveAuth && !auth.currentUser) {
+                setCloudError("로그인 세션을 확인하지 못했습니다. 다시 로그인 후 시도해주세요.");
+                setLoading(false);
+              }
+            }, 1500);
+          }
+
+          return () => {
+            window.clearTimeout(loadingTimeout);
+            unsubscribe();
+          };
+        }, []);
+
+        useEffect(() => {
+          if (!user) return;
+          const unsubSet = onSnapshot(
+            doc(db, "artifacts", appId, "public", "data", "settings", "config"),
+            (s) => {
+              if (s.exists()) setGlobalSettings(s.data());
+              else
+                setDoc(doc(db, "artifacts", appId, "public", "data", "settings", "config"), {
+                  adminPassword: "admin1234",
+                });
+            },
+            (error) => {
+              console.error("Settings snapshot error:", error);
+              setCloudError("설정 데이터를 불러오지 못했습니다.");
+            }
+          );
+          const unsubIns = onSnapshot(
+            collection(db, "artifacts", appId, "public", "data", "insurances"),
+            (s) => setInsurances(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+            (error) => {
+              console.error("Insurances snapshot error:", error);
+              setCloudError("보험 데이터를 불러오지 못했습니다.");
+            }
+          );
+          const unsubVeh = onSnapshot(
+            collection(db, "artifacts", appId, "public", "data", "vehicles"),
+            (s) => setVehicles(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+            (error) => {
+              console.error("Vehicles snapshot error:", error);
+              setCloudError("차량 데이터를 불러오지 못했습니다.");
+            }
+          );
+          const unsubAcc = onSnapshot(
+            collection(db, "artifacts", appId, "public", "data", "accidents"),
+            (s) => {
+              const sortedAccidents = s.docs
+                .map((d) => ({ id: d.id, ...d.data() }))
+                .sort((a, b) => new Date(b.date) - new Date(a.date));
+              setAccidents(sortedAccidents);
+              setLoading(false);
+            },
+            (error) => {
+              console.error("Accidents snapshot error:", error);
+              setCloudError("사고 데이터를 불러오지 못했습니다.");
+              setLoading(false);
+            }
+          );
+          const unsubClaims = onSnapshot(
+            collection(db, "artifacts", appId, "public", "data", "claims"),
+            (s) => {
+              setClaims(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+            },
+            (error) => {
+              console.error("Claims snapshot error:", error);
+              setCloudError("청구 데이터를 불러오지 못했습니다.");
+            }
+          );
+          const unsubDocs = onSnapshot(
+            collection(db, "artifacts", appId, "public", "data", "documents"),
+            (s) => {
+              const rows = s.docs
+                .map((d) => ({ id: d.id, ...d.data() }))
+                .sort((a, b) =>
+                  normalizeText(b.createdAt || "").localeCompare(
+                    normalizeText(a.createdAt || ""),
+                    "ko"
+                  )
+                );
+              setDocuments(rows);
+            },
+            (error) => {
+              console.error("Documents snapshot error:", error);
+              setCloudError("문서 데이터를 불러오지 못했습니다.");
+            }
+          );
+          const unsubPartners = onSnapshot(
+            collection(db, "artifacts", appId, "public", "data", "partners"),
+            (s) => {
+              const rows = s.docs
+                .map((d) => ({ id: d.id, ...d.data() }))
+                .sort((a, b) =>
+                    normalizeText(a.category).localeCompare(normalizeText(b.category), "ko")
+                );
+              setPartners(rows);
+            },
+            (error) => {
+              console.error("Partners snapshot error:", error);
+              setCloudError("업체 데이터를 불러오지 못했습니다.");
+            }
+          );
+          return () => {
+            unsubSet();
+            unsubIns();
+            unsubVeh();
+            unsubAcc();
+            unsubClaims();
+            unsubDocs();
+            unsubPartners();
+          };
+        }, [user]);
+
+        const handleLogin = (e) => {
+          e.preventDefault();
+          if (officeFlowEmail) {
+            setIsAuthenticated(true);
+            return;
+          }
+          if (passwordInput === globalSettings.adminPassword) setIsAuthenticated(true);
+          else alert("비밀번호 불일치");
+        };
+
+        const handlePasswordChange = async (e) => {
+          e.preventDefault();
+          if (formData.newPassword !== formData.confirmPassword) return alert("비밀번호 불일치");
+          await setDoc(
+            doc(db, "artifacts", appId, "public", "data", "settings", "config"),
+            { adminPassword: formData.newPassword },
+            { merge: true }
+          );
+          alert("변경 완료");
+          setIsModalOpen(false);
+          setFormData({});
+        };
+
+        const handleSave = async (e) => {
+          e.preventDefault();
+          if (!user) return alert("서버 연결 끊김");
+          const isInsuranceMode = modalType === "insurance" || modalType === "insuranceRenew";
+          const isRenewMode = modalType === "insuranceRenew";
+          const colName = isInsuranceMode
+            ? "insurances"
+            : modalType === "vehicle"
+              ? "vehicles"
+              : "accidents";
+          let data = { ...formData };
+          delete data.id;
+
+          if (!editId) {
+            data.createdAt = serverTimestamp();
+          }
+
+          if (modalType === "vehicle" && data.ownershipType === "자차") {
+            data.monthlyCost = 0;
+            data.contractEnd = null;
+            data.provider = "";
+          }
+          if (modalType === "accident") {
+            const rc = Number(data.repairCost || 0),
+              ip = Number(data.insurancePerson || 0),
+              iprop = Number(data.insuranceProperty || 0),
+              ded = Number(data.deductible || 0);
+            data = {
+              ...data,
+              repairCost: rc,
+              insurancePerson: ip,
+              insuranceProperty: iprop,
+              deductible: ded,
+              totalCost: rc + ip + iprop + ded,
+            };
+          } else {
+            data.amount = Number(data.amount || 0);
+            data.monthlyCost = Number(data.monthlyCost || 0);
+          }
+          if (isInsuranceMode) {
+            data.startDate = normalizeDateInput(data.startDate);
+            data.endDate = normalizeDateInput(data.endDate);
+            const source = renewSource || {};
+            const renewalGroupId =
+              normalizeText(source.renewalGroupId) ||
+              normalizeText(source.id) ||
+              normalizeText(data.renewalGroupId);
+            data.renewalGroupId = renewalGroupId;
+            data.isCurrent = isRenewMode
+              ? true
+              : typeof data.isCurrent === "boolean"
+                ? data.isCurrent
+                : true;
+            data.renewedFromId = isRenewMode
+              ? normalizeText(source.id)
+              : normalizeText(data.renewedFromId) || "";
+          }
+
+          try {
+            if (editId && !isRenewMode) {
+              await updateDoc(doc(db, "artifacts", appId, "public", "data", colName, editId), data);
+            } else {
+              const newDoc = await addDoc(
+                collection(db, "artifacts", appId, "public", "data", colName),
+                data
+              );
+              if (isInsuranceMode) {
+                const groupId = normalizeText(data.renewalGroupId) || newDoc.id;
+                await updateDoc(doc(db, "artifacts", appId, "public", "data", colName, newDoc.id), {
+                  renewalGroupId: groupId,
+                  isCurrent: true,
+                });
+                const related = insurances.filter(
+                  (x) =>
+                    x.id !== newDoc.id &&
+                    getInsuranceGroupKey({ ...x, renewalGroupId: x.renewalGroupId || x.id }) ===
+                      groupId
+                );
+                if (related.length)
+                  await Promise.all(
+                    related.map((x) =>
+                      updateDoc(doc(db, "artifacts", appId, "public", "data", colName, x.id), {
+                        isCurrent: false,
+                      })
+                    )
+                  );
+              }
+            }
+            setIsModalOpen(false);
+            setFormData({});
+            setEditId(null);
+            setRenewSource(null);
+          } catch (e) {
+            console.error(e);
+            alert("저장 실패");
+          }
+        };
+
+        const handleDelete = async (col, id) => {
+          if (confirm("삭제하시겠습니까?"))
+            await deleteDoc(doc(db, "artifacts", appId, "public", "data", col, id));
+        };
+
+        const handleEdit = (item, type) => {
+          setFormData(item);
+          setEditId(item.id);
+          setModalType(type);
+          setRenewSource(null);
+          setIsModalOpen(true);
+        };
+        const handleRenewInsurance = (item) => {
+          setFormData({
+            type: item.type || "",
+            company: item.company || "",
+            name: item.name || "",
+            insuredObject: item.insuredObject || "",
+            startDate: normalizeDateInput(item.endDate) || "",
+            endDate: "",
+            amount: Number(item.amount || 0),
+          });
+          setEditId(null);
+          setRenewSource(item);
+          setModalType("insuranceRenew");
+          setIsModalOpen(true);
+        };
+
+        const handleOpenAdd = (type) => {
+          setFormData({});
+          setEditId(null);
+          setModalType(type);
+          setRenewSource(null);
+          setIsModalOpen(true);
+        };
+
+        const handleSaveClaim = async (accidentId, patch) => {
+          const target = accidents.find((a) => a.id === accidentId);
+          if (!target) return;
+          const payload = {
+            accidentId,
+            plateNumber: target.plateNumber || "",
+            driver: target.driver || "",
+            amount: Number(target.totalCost || target.repairCost || 0),
+            status: patch.status || "청구중",
+            paidAmount: Number(patch.paidAmount || 0),
+            paidDate: normalizeDateInput(patch.paidDate) || "",
+            note: normalizeText(patch.note) || "",
+            updatedAt: new Date().toISOString(),
+          };
+          await setDoc(
+            doc(db, "artifacts", appId, "public", "data", "claims", accidentId),
+            payload,
+            { merge: true }
+          );
+        };
+
+        const handleSaveDocument = async (payload) => {
+          if (!payload || !payload.title) return;
+          await addDoc(collection(db, "artifacts", appId, "public", "data", "documents"), {
+            category: normalizeText(payload.category) || "기타",
+            title: normalizeText(payload.title),
+            relatedType: normalizeText(payload.relatedType) || "",
+            relatedKey: normalizeText(payload.relatedKey) || "",
+            link: sanitizeLink(payload.link),
+            memo: normalizeText(payload.memo) || "",
+            createdAt: new Date().toISOString(),
+          });
+        };
+        const handleDeleteDocument = async (id) => {
+          if (!confirm("문서를 삭제하시겠습니까?")) return;
+          await deleteDoc(doc(db, "artifacts", appId, "public", "data", "documents", id));
+        };
+
+        const handleSavePartner = async (payload) => {
+          if (!payload || !payload.category || !payload.name) return;
+          await addDoc(collection(db, "artifacts", appId, "public", "data", "partners"), {
+            category: normalizeText(payload.category),
+            name: normalizeText(payload.name),
+            contact: normalizeText(payload.contact) || "",
+            manager: normalizeText(payload.manager) || "",
+            phone: normalizeText(payload.phone) || "",
+            note: normalizeText(payload.note) || "",
+            createdAt: new Date().toISOString(),
+          });
+        };
+        const handleDeletePartner = async (id) => {
+          if (!confirm("업체를 삭제하시겠습니까?")) return;
+          await deleteDoc(doc(db, "artifacts", appId, "public", "data", "partners", id));
+        };
+
+        const handleFileUpload = (type) => {
+          uploadTypeRef.current = type;
+          setUploadType(type);
+          fileInputRef.current.click();
+        };
+        const processFile = (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = async (evt) => {
+            try {
+              const rows = parseCSV(evt.target.result);
+              if (!rows.length) return alert("데이터 없음");
+              const uploadedType = uploadTypeRef.current || uploadType;
+              if (!uploadedType) return alert("업로드 유형을 다시 선택해주세요.");
+              const makeKey = (type, data) => {
+                if (type === "insurances") {
+                  return [
+                    "INS",
+                    normalizeText(data.type),
+                    normalizeText(data.company),
+                    normalizeText(data.name),
+                    normalizeDateInput(data.startDate),
+                    normalizeDateInput(data.endDate),
+                  ].join("|");
+                }
+                if (type === "vehicles") {
+                  return ["VEH", normalizeText(data.plateNumber)].join("|");
+                }
+                return [
+                  "ACC",
+                  normalizeDateInput(data.date),
+                  normalizeText(data.plateNumber),
+                  normalizeText(data.description),
+                ].join("|");
+              };
+              const existingSet = new Set(
+                (uploadedType === "insurances"
+                  ? insurances
+                  : uploadedType === "vehicles"
+                    ? vehicles
+                    : accidents
+                ).map((x) => makeKey(uploadedType, x))
+              );
+              let inserted = 0;
+              let skipped = 0;
+              let failed = 0;
+              for (const row of rows) {
+                let d = {};
+                if (uploadedType === "insurances")
+                  d = {
+                    type: normalizeText(row["종류"]),
+                    company: normalizeText(row["보험사"]),
+                    name: normalizeText(row["증권명"]),
+                    insuredObject: normalizeText(row["피보험물"]),
+                    startDate: normalizeDateInput(row["시작일"]),
+                    endDate: normalizeDateInput(row["만기일"]),
+                    amount: parseNumberSafe(row["금액"]),
+                  };
+                else if (uploadedType === "vehicles")
+                  d = {
+                    plateNumber: normalizeText(row["차량번호"]),
+                    model: normalizeText(row["모델"]),
+                    ownershipType: normalizeText(row["소유형태"]),
+                    provider: normalizeText(row["업체명"]),
+                    driver: normalizeText(row["운전자"]),
+                    contractEnd: normalizeDateInput(row["만기일"]),
+                    monthlyCost: parseNumberSafe(row["월비용"]),
+                  };
+                else if (uploadedType === "accidents") {
+                  const rc = parseNumberSafe(row["수리비"]),
+                    ip = parseNumberSafe(row["대인배상"]),
+                    iprop = parseNumberSafe(row["대물배상"]),
+                    ded = parseNumberSafe(row["자차부담금"]);
+                  d = {
+                    date: normalizeDateInput(row["발생일"]),
+                    plateNumber: normalizeText(row["차량번호"]),
+                    driver: normalizeText(row["운전자"]),
+                    description: normalizeText(row["내용"]),
+                    repairCost: rc,
+                    insurancePerson: ip,
+                    insuranceProperty: iprop,
+                    deductible: ded,
+                    totalCost: rc + ip + iprop + ded,
+                    insuranceClaimed: normalizeText(row["보험처리여부"]) || "미처리",
+                  };
+                }
+                const requiredOk =
+                  uploadedType === "insurances"
+                    ? d.type && d.company && d.name && d.startDate && d.endDate
+                    : uploadedType === "vehicles"
+                      ? d.plateNumber && d.model && d.ownershipType
+                      : d.date && d.plateNumber && d.driver;
+                if (!requiredOk) {
+                  skipped++;
+                  continue;
+                }
+                if (uploadedType === "vehicles" && d.ownershipType === "자차") {
+                  d.monthlyCost = 0;
+                  d.contractEnd = "";
+                  d.provider = "";
+                }
+                const key = makeKey(uploadedType, d);
+                if (!d || !key || existingSet.has(key)) {
+                  skipped++;
+                  continue;
+                }
+                try {
+                  await addDoc(collection(db, "artifacts", appId, "public", "data", uploadedType), {
+                    ...d,
+                    createdAt: serverTimestamp(),
+                  });
+                  existingSet.add(key);
+                  inserted++;
+                } catch (err) {
+                  failed++;
+                }
+              }
+              alert(`업로드 완료\n성공 ${inserted}건 / 중복·무효 ${skipped}건 / 실패 ${failed}건`);
+            } catch (e) {
+              console.error(e);
+              alert("오류 발생");
+            }
+            fileInputRef.current.value = "";
+          };
+          reader.readAsText(file);
+        };
+
+        const handleViewCostDetail = (accidentData) => {
+          setFormData(accidentData);
+          setModalType("costDetail");
+          setIsModalOpen(true);
+        };
+        const handleViewInsuranceHistory = (insuranceItem) => {
+          const target = normalizeText(insuranceItem?.insuredObject);
+          const rows = insurances
+            .filter((x) => normalizeText(x.insuredObject) === target)
+            .sort((a, b) => {
+              const ad = normalizeDateInput(a.endDate);
+              const bd = normalizeDateInput(b.endDate);
+              return normalizeText(bd).localeCompare(normalizeText(ad), "ko");
+            });
+          setFormData({ selectedInsurance: insuranceItem, insuranceHistoryRows: rows });
+          setModalType("insuranceHistory");
+          setIsModalOpen(true);
+        };
+
+        const stats = useMemo(() => {
+          const filteredInsurances = insurances.filter((i) => {
+            const startYear = getYearSafe(i.startDate);
+            const endYear = getYearSafe(i.endDate);
+            if (!startYear || !endYear) return false;
+            return startYear <= dashboardYear && endYear >= dashboardYear;
+          });
+          const filteredVehicles = vehicles.filter((v) => {
+            if (v.ownershipType === "자차") return true;
+            if (!v.contractEnd) return true;
+            const contractYear = getYearSafe(v.contractEnd);
+            if (!contractYear) return true;
+            return contractYear >= dashboardYear;
+          });
+          const filteredAccidents = accidents.filter((a) => getYearSafe(a.date) === dashboardYear);
+
+          const tic = filteredInsurances.reduce((a, c) => a + (c.amount || 0), 0);
+          const tvm = filteredVehicles.reduce((a, c) => a + (c.monthlyCost || 0), 0);
+          const tac = filteredAccidents.reduce((a, c) => a + (c.totalCost || c.repairCost || 0), 0);
+
+          const ei = insurances.filter((i) => {
+            const d = getDaysDifference(i.endDate);
+            return d > 0 && d <= 30;
+          });
+          const ev = vehicles.filter((v) => {
+            const d = getDaysDifference(v.contractEnd);
+            return d > 0 && d <= 30;
+          });
+
+          const annualVehicleCost = tvm * 12;
+          const totalAnnualCost = tic + annualVehicleCost + tac;
+          const costDist =
+            totalAnnualCost > 0
+              ? {
+                  insurance: Math.round((tic / totalAnnualCost) * 100),
+                  vehicle: Math.round((annualVehicleCost / totalAnnualCost) * 100),
+                  accident: Math.round((tac / totalAnnualCost) * 100),
+                }
+              : { insurance: 0, vehicle: 0, accident: 0 };
+
+          const vTypes = filteredVehicles.reduce((acc, v) => {
+            const type = v.ownershipType || "기타";
+            acc[type] = (acc[type] || 0) + 1;
+            return acc;
+          }, {});
+
+          return {
+            tic,
+            tvm,
+            tac,
+            ei,
+            ev,
+            vc: filteredVehicles.length,
+            ac: filteredAccidents.length,
+            ic: filteredInsurances.length,
+            costDist,
+            vTypes,
+            recentAccidents: filteredAccidents.slice(0, 4),
+          };
+        }, [insurances, vehicles, accidents, dashboardYear]);
+
+        const claimsByAccidentId = useMemo(() => {
+          return claims.reduce((acc, row) => {
+            acc[row.accidentId] = row;
+            return acc;
+          }, {});
+        }, [claims]);
+
+        const alertItems = useMemo(() => {
+          const list = [];
+          stats.ei.forEach((i) =>
+            list.push({
+              level: "high",
+              msg: `보험 만기 임박: ${i.name} (${i.insuredObject}) ${formatDday(i.endDate)}`,
+            })
+          );
+          stats.ev.forEach((v) =>
+            list.push({
+              level: "high",
+              msg: `차량 계약 만기 임박: ${v.plateNumber} ${formatDday(v.contractEnd)}`,
+            })
+          );
+          accidents.forEach((a) => {
+            const c = claimsByAccidentId[a.id];
+            if (!c || c.status !== "지급완료") {
+              list.push({
+                level: "medium",
+                msg: `미정산 사고: ${a.plateNumber} / ${formatDate(a.date)} / ${formatCurrency(a.totalCost || a.repairCost || 0)}`,
+              });
+            }
+          });
+          return list.slice(0, 20);
+        }, [stats, claimsByAccidentId, accidents]);
+
+        const yearOptions = useMemo(() => {
+          const current = new Date().getFullYear();
+          const years = [];
+          for (let i = current - 2; i <= current + 2; i++) years.push(i);
+          return years;
+        }, []);
+        useEffect(() => {
+          setListKeyword("");
+          setListDateFrom("");
+          setListDateTo("");
+          setListSort(
+            activeTab === "insurance"
+              ? "endDate_asc"
+              : activeTab === "vehicle"
+                ? "contractEnd_asc"
+                : "date_desc"
+          );
+        }, [activeTab]);
+
+        const insuranceCurrentMap = useMemo(() => {
+          const byGroup = {};
+          insurances.forEach((i) => {
+            const g = getInsuranceGroupKey(i);
+            if (!byGroup[g]) byGroup[g] = [];
+            byGroup[g].push(i);
+          });
+          const map = {};
+          Object.values(byGroup).forEach((groupRows) => {
+            const sorted = [...groupRows].sort((a, b) => {
+              const ad = normalizeDateInput(a.endDate);
+              const bd = normalizeDateInput(b.endDate);
+              if (ad !== bd) return normalizeText(bd).localeCompare(normalizeText(ad), "ko");
+              return normalizeText(b.id).localeCompare(normalizeText(a.id), "ko");
+            });
+            if (sorted[0]) map[sorted[0].id] = true;
+            sorted.slice(1).forEach((x) => {
+              map[x.id] = false;
+            });
+          });
+          return map;
+        }, [insurances]);
+
+        const currentRows = useMemo(
+          () =>
+            activeTab === "insurance" ? insurances : activeTab === "vehicle" ? vehicles : accidents,
+          [activeTab, insurances, vehicles, accidents]
+        );
+
+        const getRowDateByTab = (row) =>
+          normalizeDateInput(
+            activeTab === "insurance"
+              ? row.endDate
+              : activeTab === "vehicle"
+                ? row.contractEnd
+                : row.date
+          );
+
+        const filteredRows = useMemo(() => {
+          const kw = normalizeText(listKeyword).toLowerCase();
+          const fromDate = normalizeDateInput(listDateFrom);
+          const toDate = normalizeDateInput(listDateTo);
+          const inRange = (d) => {
+            if (!fromDate && !toDate) return true;
+            if (!d) return false;
+            if (fromDate && d < fromDate) return false;
+            if (toDate && d > toDate) return false;
+            return true;
+          };
+          let rows = currentRows.filter((row) => {
+            const d = getRowDateByTab(row);
+            const dateOk = inRange(d);
+            if (!dateOk) return false;
+            if (!kw) return true;
+            if (activeTab === "insurance") {
+              return [row.type, row.company, row.name, row.insuredObject].some((v) =>
+                normalizeText(v).toLowerCase().includes(kw)
+              );
+            }
+            if (activeTab === "vehicle") {
+              return [row.plateNumber, row.model, row.ownershipType, row.provider, row.driver].some(
+                (v) => normalizeText(v).toLowerCase().includes(kw)
+              );
+            }
+            return [row.plateNumber, row.driver, row.description, row.insuranceClaimed].some((v) =>
+              normalizeText(v).toLowerCase().includes(kw)
+            );
+          });
+          rows = [...rows].sort((a, b) => {
+            if (listSort === "cost_desc") {
+              const av =
+                Number(
+                  activeTab === "insurance"
+                    ? a.amount
+                    : activeTab === "vehicle"
+                      ? a.monthlyCost
+                      : a.totalCost || a.repairCost
+                ) || 0;
+              const bv =
+                Number(
+                  activeTab === "insurance"
+                    ? b.amount
+                    : activeTab === "vehicle"
+                      ? b.monthlyCost
+                      : b.totalCost || b.repairCost
+                ) || 0;
+              return bv - av;
+            }
+            if (listSort === "cost_asc") {
+              const av =
+                Number(
+                  activeTab === "insurance"
+                    ? a.amount
+                    : activeTab === "vehicle"
+                      ? a.monthlyCost
+                      : a.totalCost || a.repairCost
+                ) || 0;
+              const bv =
+                Number(
+                  activeTab === "insurance"
+                    ? b.amount
+                    : activeTab === "vehicle"
+                      ? b.monthlyCost
+                      : b.totalCost || b.repairCost
+                ) || 0;
+              return av - bv;
+            }
+            if (listSort === "plate_asc")
+              return normalizeText(a.plateNumber).localeCompare(normalizeText(b.plateNumber), "ko");
+            if (listSort === "name_asc")
+              return normalizeText(
+                activeTab === "insurance" ? a.name : activeTab === "vehicle" ? a.model : a.driver
+              ).localeCompare(
+                normalizeText(
+                  activeTab === "insurance" ? b.name : activeTab === "vehicle" ? b.model : b.driver
+                ),
+                "ko"
+              );
+            const ad = getRowDateByTab(a);
+            const bd = getRowDateByTab(b);
+            if (listSort.endsWith("_asc"))
+              return normalizeText(ad).localeCompare(normalizeText(bd), "ko");
+            return normalizeText(bd).localeCompare(normalizeText(ad), "ko");
+          });
+          return rows;
+        }, [currentRows, activeTab, listKeyword, listDateFrom, listDateTo, listSort]);
+
+        const filteredClaimRows = useMemo(() => {
+          const kw = normalizeText(claimsKeyword).toLowerCase();
+          return accidents.filter((a) => {
+            const c = claimsByAccidentId[a.id] || {};
+            const d = claimDrafts[a.id] || {
+              status: c.status || "청구중",
+              paidDate: c.paidDate || "",
+              paidAmount: c.paidAmount || 0,
+              note: c.note || "",
+            };
+            if (claimsFilterStatus !== "전체" && d.status !== claimsFilterStatus) return false;
+            if (!kw) return true;
+            return [a.plateNumber, a.driver, a.description, d.status]
+              .map((v) => normalizeText(v).toLowerCase())
+              .some((v) => v.includes(kw));
+          });
+        }, [accidents, claimsByAccidentId, claimDrafts, claimsFilterStatus, claimsKeyword]);
+
+        const menuItems = [
+          { id: "dashboard", icon: "layout-dashboard", label: "대시보드" },
+          { id: "insurance", icon: "shield-check", label: "보험 관리" },
+          { id: "vehicle", icon: "car", label: "차량 관리" },
+          { id: "accident", icon: "alert-triangle", label: "사고 내역" },
+          { id: "renewal", icon: "refresh-cw", label: "만기·갱신 센터" },
+          { id: "claims", icon: "receipt", label: "청구·정산 관리" },
+          { id: "alerts", icon: "bell", label: "알림센터" },
+          { id: "reports", icon: "file-text", label: "리포트 센터" },
+          { id: "documents", icon: "folder-open", label: "증빙 문서함" },
+          { id: "partners", icon: "building-2", label: "업체/계약처 관리" },
+        ];
+
+        if (!isAuthenticated)
+          return (
+            <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in-up">
+                <div className="bg-blue-600 p-8 text-center text-white relative">
+                  <Icon name="shield-check" size={48} className="mx-auto mb-4" />
+                  <h1 className="text-2xl font-bold">Corp.Manager</h1>
+                  <p className="text-blue-100 text-sm mt-1">Standalone Ver.</p>
+                  <div className="absolute top-2 right-2 flex items-center gap-1 bg-blue-700 px-2 py-1 rounded text-xs opacity-80">
+                    {user ? (
+                      <Icon name="wifi" size={12} className="text-green-300 animate-pulse" />
+                    ) : (
+                      <Icon name="cloud-off" size={12} />
+                    )}
+                    {user ? "클라우드 연동됨" : "클라우드 연결중"}
+                  </div>
+                </div>
+                <form onSubmit={handleLogin} className="p-8 space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">비밀번호</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-3 text-gray-400">
+                        <Icon name="lock" size={20} />
+                      </span>
+                      <input
+                        type="password"
+                        className="w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={passwordInput}
+                        onChange={(e) => setPasswordInput(e.target.value)}
+                        autoFocus
+                        placeholder="비밀번호를 입력하세요"
+                      />
+                    </div>
+                  </div>
+                  <button className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-lg flex justify-center gap-2 items-center">
+                    <Icon name="log-in" size={20} /> 접속
+                  </button>
+                </form>
+              </div>
+            </div>
+          );
+
+        return (
+          <div className="flex h-screen">
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={processFile}
+              accept=".csv"
+              className="hidden"
+            />
+
+            <aside className="w-64 bg-slate-900 text-white hidden md:flex flex-col h-screen fixed left-0 top-0 z-20 shadow-2xl">
+              <div className="p-8">
+                <h1 className="text-2xl font-black text-white tracking-tighter flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-500 to-indigo-600 flex items-center justify-center text-base shadow-lg">
+                    C
+                  </div>
+                  Corp.Manager
+                </h1>
+                <p className="text-slate-500 text-[10px] mt-1 uppercase tracking-widest font-bold">
+                  Enterprise Solution
+                </p>
+              </div>
+              <nav className="flex-1 px-4 space-y-2">
+                {menuItems.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => setActiveTab(m.id)}
+                    className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-200 group ${
+                      activeTab === m.id
+                        ? "bg-blue-600 text-white shadow-lg shadow-blue-900/50 translate-x-1"
+                        : "text-slate-400 hover:bg-slate-800 hover:text-white hover:translate-x-1"
+                    }`}
+                  >
+                    <Icon name={m.icon} size={20} />
+                    <span>{m.label}</span>
+                    {activeTab === m.id && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-300"></div>}
+                  </button>
+                ))}
+              </nav>
+              <div className="p-6 border-t border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-500 to-indigo-600 flex items-center justify-center font-bold text-sm shadow-lg">
+                    A
+                  </div>
+                  <div className="leading-tight">
+                    <div className="text-sm font-bold">관리자</div>
+                    <div className="text-xs text-slate-500">시스템 마스터</div>
+                  </div>
+                </div>
+                <div
+                  className={`mt-4 flex items-center gap-2 text-[11px] font-semibold px-2.5 py-2 rounded-lg border ${
+                    cloudError
+                      ? "text-red-300 bg-red-900/30 border-red-900/40"
+                      : user
+                        ? "text-emerald-300 bg-emerald-900/20 border-emerald-900/40"
+                        : "text-amber-300 bg-amber-900/20 border-amber-900/40"
+                  }`}
+                >
+                  <Icon
+                    name={cloudError ? "cloud-off" : user ? "cloud" : "cloud-off"}
+                    size={14}
+                    className={cloudError ? "text-red-300" : user ? "text-emerald-300" : "text-amber-300"}
+                  />
+                  <span>{cloudError ? "클라우드 오류" : user ? "클라우드 연동됨" : "클라우드 연결중"}</span>
+                </div>
+                {!officeFlowEmail && (
+                  <button
+                    onClick={() => {
+                      setModalType("password");
+                      setIsModalOpen(true);
+                    }}
+                    className="mt-3 w-full flex items-center gap-2 px-4 py-2 text-sm text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                  >
+                    <Icon name="settings" size={16} /> 설정 (비밀번호)
+                  </button>
+                )}
+              </div>
+            </aside>
+
+            <main className="flex-1 md:ml-64 overflow-y-auto p-4 md:p-8 bg-slate-100">
+              {cloudError && (
+                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-sm">
+                  {cloudError}
+                </div>
+              )}
+              <div className="md:hidden mb-4 bg-white rounded-xl border border-gray-200 p-3 shadow-sm space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-gray-700">메뉴</span>
+                  <span className={`text-xs font-semibold ${user ? "text-emerald-600" : "text-red-500"}`}>
+                    {user ? "클라우드 정상" : "클라우드 확인중"}
+                  </span>
+                </div>
+                <select
+                  value={activeTab}
+                  onChange={(e) => setActiveTab(e.target.value)}
+                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700"
+                >
+                  {menuItems.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {loading ? (
+                <div className="text-center mt-20 text-slate-500 font-medium">클라우드 연결중...</div>
+              ) : (
+                <>
+                  {activeTab === "dashboard" && (
+                    <div className="space-y-6 animate-fade-in">
+                      <div className="flex justify-between items-center">
+                        <h2 className="text-xl font-bold text-gray-800">관리 현황 대시보드</h2>
+                        <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg shadow-sm border border-gray-200">
+                          <Icon name="filter" size={16} className="text-slate-500" />
+                          <span className="text-sm text-gray-600">조회 연도:</span>
+                          <select
+                            value={dashboardYear}
+                            onChange={(e) => setDashboardYear(Number(e.target.value))}
+                            className="bg-transparent text-sm font-bold text-slate-800 outline-none cursor-pointer"
+                          >
+                            {yearOptions.map((y) => (
+                              <option key={y} value={y}>
+                                {y}년
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="bg-white p-6 rounded-xl border-l-4 border-blue-500 shadow-sm relative overflow-hidden group">
+                          <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                            <Icon name="shield-check" size={64} />
+                          </div>
+                          <p className="text-sm text-gray-500">총 보험료 ({dashboardYear}년)</p>
+                          <h3 className="text-2xl font-bold mt-1">{formatCurrency(stats.tic)}</h3>
+                          <p className="text-xs text-gray-400 mt-2">유효 계약: {stats.ic}건</p>
+                        </div>
+                        <div className="bg-white p-6 rounded-xl border-l-4 border-emerald-500 shadow-sm relative overflow-hidden group">
+                          <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                            <Icon name="car" size={64} />
+                          </div>
+                          <p className="text-sm text-gray-500">차량 운용 비용 (월평균)</p>
+                          <h3 className="text-2xl font-bold mt-1">{formatCurrency(stats.tvm)}</h3>
+                          <p className="text-xs text-gray-400 mt-2">운용 대수: {stats.vc}대</p>
+                        </div>
+                        <div className="bg-white p-6 rounded-xl border-l-4 border-amber-500 shadow-sm relative overflow-hidden group">
+                          <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                            <Icon name="alert-triangle" size={64} />
+                          </div>
+                          <p className="text-sm text-gray-500">
+                            사고 처리 비용 ({dashboardYear}년)
+                          </p>
+                          <h3 className="text-2xl font-bold mt-1">{formatCurrency(stats.tac)}</h3>
+                          <p className="text-xs text-gray-400 mt-2">사고 건수: {stats.ac}건</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                          <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2">
+                            <Icon name="pie-chart" size={18} className="text-slate-600" />{" "}
+                            {dashboardYear}년 비용 구성 분석
+                          </h3>
+                          <div className="mb-4">
+                            <div className="flex h-8 w-full rounded-full overflow-hidden bg-gray-100 shadow-inner">
+                              <div
+                                style={{ width: `${stats.costDist.insurance}%` }}
+                                className="bg-blue-500 h-full bar-grow relative group"
+                                title={`보험료: ${stats.costDist.insurance}%`}
+                              ></div>
+                              <div
+                                style={{ width: `${stats.costDist.vehicle}%` }}
+                                className="bg-emerald-500 h-full bar-grow relative group"
+                                title={`차량비용: ${stats.costDist.vehicle}%`}
+                              ></div>
+                              <div
+                                style={{ width: `${stats.costDist.accident}%` }}
+                                className="bg-amber-500 h-full bar-grow relative group"
+                                title={`사고비용: ${stats.costDist.accident}%`}
+                              ></div>
+                            </div>
+                            <div className="flex justify-between mt-4 text-xs text-gray-600 px-1 font-medium">
+                              <div className="flex items-center gap-1.5">
+                                <div className="w-3 h-3 rounded-full bg-blue-500"></div> 보험료 (
+                                {stats.costDist.insurance}%)
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <div className="w-3 h-3 rounded-full bg-emerald-500"></div> 차량운용
+                                ({stats.costDist.vehicle}%)
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <div className="w-3 h-3 rounded-full bg-amber-500"></div> 사고처리 (
+                                {stats.costDist.accident}%)
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                          <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2">
+                            <Icon name="bar-chart-2" size={18} className="text-slate-600" />{" "}
+                            {dashboardYear}년 차량 보유 형태
+                          </h3>
+                          <div className="space-y-4">
+                            {Object.entries(stats.vTypes).map(([type, count]) => (
+                              <div key={type}>
+                                <div className="flex justify-between text-sm mb-1">
+                                  <span className="font-medium text-gray-700">{type}</span>
+                                  <span className="text-gray-500">{count}대</span>
+                                </div>
+                                <div className="w-full bg-gray-100 rounded-full h-2.5">
+                                  <div
+                                    className="bg-slate-700 h-2.5 rounded-full bar-grow"
+                                    style={{ width: `${(count / stats.vc) * 100}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            ))}
+                            {!Object.keys(stats.vTypes).length && (
+                              <div className="text-center text-gray-400 text-sm py-2">
+                                데이터 없음
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-6">
+                          <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <h3 className="font-bold mb-4 text-red-500 flex gap-2">
+                              <Icon name="calendar" size={18} /> 만기 임박 (오늘 기준 30일 내)
+                            </h3>
+                            {stats.ei.length === 0 && stats.ev.length === 0 ? (
+                              <div className="text-gray-400 text-center text-sm py-4">
+                                임박한 건이 없습니다.
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                {stats.ei.map((i) => (
+                                  <div
+                                    key={i.id}
+                                    className="flex justify-between items-center p-3 bg-red-50 rounded-lg border border-red-100"
+                                  >
+                                    <div>
+                                      <div className="text-sm font-bold text-gray-800">
+                                        {i.name}
+                                      </div>
+                                      <div className="text-xs text-blue-700 font-medium">
+                                        {i.insuredObject}
+                                      </div>
+                                      <div className="text-xs text-gray-500">
+                                        만기: {formatDate(i.endDate)}
+                                      </div>
+                                    </div>
+                                    <span className="text-xs font-bold bg-white text-red-600 px-2 py-1 rounded shadow-sm">
+                                      {formatDday(i.endDate)}
+                                    </span>
+                                  </div>
+                                ))}
+                                {stats.ev.map((v) => (
+                                  <div
+                                    key={v.id}
+                                    className="flex justify-between items-center p-3 bg-orange-50 rounded-lg border border-orange-100"
+                                  >
+                                    <div>
+                                      <div className="text-sm font-bold text-gray-800">
+                                        {v.plateNumber}
+                                      </div>
+                                      <div className="text-xs text-gray-500">
+                                        계약만료 / {formatDate(v.contractEnd)}
+                                      </div>
+                                    </div>
+                                    <span className="text-xs font-bold bg-white text-orange-600 px-2 py-1 rounded shadow-sm">
+                                      {formatDday(v.contractEnd)}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                          <h3 className="font-bold mb-4 text-slate-700 flex gap-2">
+                            <Icon name="activity" size={18} /> {dashboardYear}년 사고 내역
+                          </h3>
+                          <div className="overflow-hidden">
+                            {stats.recentAccidents.length === 0 ? (
+                              <div className="text-gray-400 text-center text-sm py-4">
+                                사고 내역이 없습니다.
+                              </div>
+                            ) : (
+                              <table className="w-full text-xs text-left">
+                                <thead className="bg-gray-50 text-gray-500">
+                                  <tr>
+                                    <th className="px-3 py-2">날짜</th>
+                                    <th className="px-3 py-2">차량</th>
+                                    <th className="px-3 py-2 text-right">금액</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                  {stats.recentAccidents.map((a) => (
+                                    <tr
+                                      key={a.id}
+                                      className="hover:bg-gray-50 transition-colors cursor-pointer"
+                                      onClick={() => handleEdit(a, "accident")}
+                                    >
+                                      <td className="px-3 py-3 text-gray-500">
+                                        {formatDate(a.date)}
+                                      </td>
+                                      <td className="px-3 py-3 font-medium">{a.plateNumber}</td>
+                                      <td className="px-3 py-3 text-right">
+                                        <span
+                                          className={`font-bold ${a.insuranceClaimed === "처리완료" ? "text-gray-400" : "text-red-500"}`}
+                                        >
+                                          {formatCurrency(a.totalCost || a.repairCost)}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === "renewal" && (
+                    <div className="space-y-6 animate-fade-in">
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden">
+                        <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl">
+                          <div className="flex items-center gap-2 font-bold text-gray-800">
+                            <Icon name="refresh-cw" size={18} /> 만기·갱신 센터
+                          </div>
+                        </div>
+                        <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <div>
+                            <h4 className="text-sm font-bold text-gray-700 mb-2">
+                              보험 만기 임박 (30일)
+                            </h4>
+                            <div className="space-y-2 max-h-80 overflow-auto">
+                              {stats.ei.length === 0 ? (
+                                <div className="text-xs text-gray-400 py-4 text-center">
+                                  대상 없음
+                                </div>
+                              ) : (
+                                stats.ei.map((i) => (
+                                  <div
+                                    key={i.id}
+                                    className="p-4 rounded-lg border border-red-100 bg-red-50 flex justify-between items-center"
+                                  >
+                                    <div>
+                                      <div className="font-medium text-sm text-gray-800">
+                                        {i.name}
+                                      </div>
+                                      <div className="text-xs text-red-700">
+                                        {i.insuredObject} · {formatDate(i.endDate)}
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                      <span className="text-xs font-bold bg-white text-red-600 px-2 py-1 rounded shadow-sm">
+                                        {formatDday(i.endDate)}
+                                      </span>
+                                      <button
+                                        onClick={() => handleRenewInsurance(i)}
+                                        className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-700 text-xs font-semibold"
+                                      >
+                                        <Icon name="refresh-cw" size={14} />
+                                        갱신
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-gray-700 mb-2">
+                              차량 계약 만기 임박 (30일)
+                            </h4>
+                            <div className="space-y-2 max-h-80 overflow-auto">
+                              {stats.ev.length === 0 ? (
+                                <div className="text-xs text-gray-400 py-4 text-center">
+                                  대상 없음
+                                </div>
+                              ) : (
+                                stats.ev.map((v) => (
+                                  <div
+                                    key={v.id}
+                                    className="p-4 rounded-lg border border-orange-100 bg-orange-50 flex justify-between items-center"
+                                  >
+                                    <div>
+                                      <div className="font-medium text-sm text-gray-800">
+                                        {v.plateNumber} · {v.model}
+                                      </div>
+                                      <div className="text-xs text-orange-700">
+                                        {v.provider || "-"} · 만료 {formatDate(v.contractEnd)}
+                                      </div>
+                                    </div>
+                                    <span className="text-xs font-bold bg-white text-orange-600 px-2 py-1 rounded shadow-sm">
+                                      {formatDday(v.contractEnd)}
+                                    </span>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === "claims" && (
+                    <div className="space-y-6 animate-fade-in">
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden">
+                        <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl">
+                          <div className="flex items-center gap-2 font-bold text-gray-800">
+                            <Icon name="receipt" size={18} /> 청구·정산 관리
+                          </div>
+                        </div>
+                        <div className="p-4 border-b border-gray-100 bg-white">
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                            <input
+                              type="text"
+                              value={claimsKeyword}
+                              onChange={(e) => setClaimsKeyword(e.target.value)}
+                              placeholder="검색: 차량번호/운전자/사고내용"
+                              className="border border-gray-300 rounded px-3 py-2 text-sm md:col-span-2"
+                            />
+                            <select
+                              value={claimsFilterStatus}
+                              onChange={(e) => setClaimsFilterStatus(e.target.value)}
+                              className="border border-gray-300 rounded px-3 py-2 text-sm"
+                            >
+                              <option value="전체">상태: 전체</option>
+                              <option value="청구중">상태: 청구중</option>
+                              <option value="지급완료">상태: 지급완료</option>
+                              <option value="보류">상태: 보류</option>
+                            </select>
+                          </div>
+                          <div className="text-xs text-gray-500 mt-2">
+                            조회 결과: {filteredClaimRows.length}건
+                          </div>
+                        </div>
+                        <div className="overflow-auto">
+                          <table className="w-full text-sm text-left text-gray-500">
+                            <thead className="bg-gray-50 text-gray-700 uppercase text-xs">
+                              <tr>
+                                <th className="px-6 py-3 text-left">사고일</th>
+                                <th className="px-6 py-3 text-left">차량/운전자</th>
+                                <th className="px-6 py-3 text-right">총비용</th>
+                                <th className="px-6 py-3 text-left">상태</th>
+                                <th className="px-6 py-3 text-left">지급일</th>
+                                <th className="px-6 py-3 text-right">지급액</th>
+                                <th className="px-6 py-3 text-right">저장</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {filteredClaimRows.map((a) => {
+                                const c = claimsByAccidentId[a.id] || {};
+                                const d = claimDrafts[a.id] || {
+                                  status: c.status || "청구중",
+                                  paidDate: c.paidDate || "",
+                                  paidAmount: c.paidAmount || 0,
+                                  note: c.note || "",
+                                };
+                                return (
+                                  <tr key={a.id} className="hover:bg-gray-50 transition-colors">
+                                    <td className="px-6 py-4">{formatDate(a.date)}</td>
+                                    <td className="px-6 py-4">
+                                      <div className="font-medium text-gray-700">
+                                        {a.plateNumber}
+                                      </div>
+                                      <div className="text-xs text-gray-500">{a.driver}</div>
+                                    </td>
+                                    <td className="px-6 py-4 text-right font-medium text-gray-700">
+                                      {formatCurrency(a.totalCost || a.repairCost || 0)}
+                                    </td>
+                                    <td className="px-6 py-4">
+                                      <select
+                                        value={d.status}
+                                        onChange={(e) =>
+                                          setClaimDrafts((prev) => ({
+                                            ...prev,
+                                            [a.id]: { ...d, status: e.target.value },
+                                          }))
+                                        }
+                                        className="border border-gray-300 rounded px-2 py-1 text-xs"
+                                      >
+                                        <option value="청구중">청구중</option>
+                                        <option value="지급완료">지급완료</option>
+                                        <option value="보류">보류</option>
+                                      </select>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                      <input
+                                        type="date"
+                                        value={d.paidDate}
+                                        onChange={(e) =>
+                                          setClaimDrafts((prev) => ({
+                                            ...prev,
+                                            [a.id]: { ...d, paidDate: e.target.value },
+                                          }))
+                                        }
+                                        className="border border-gray-300 rounded px-2 py-1 text-xs"
+                                      />
+                                    </td>
+                                    <td className="px-6 py-4 text-right">
+                                      <input
+                                        type="number"
+                                        value={d.paidAmount}
+                                        onChange={(e) =>
+                                          setClaimDrafts((prev) => ({
+                                            ...prev,
+                                            [a.id]: { ...d, paidAmount: e.target.value },
+                                          }))
+                                        }
+                                        className="border border-gray-300 rounded px-2 py-1 text-xs w-24 text-right"
+                                      />
+                                    </td>
+                                    <td className="px-6 py-4 text-right">
+                                      <button
+                                        onClick={() => handleSaveClaim(a.id, d)}
+                                        className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-700 text-xs font-semibold"
+                                      >
+                                        <Icon name="save" size={14} />
+                                        저장
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                              {filteredClaimRows.length === 0 && (
+                                <tr>
+                                  <td colSpan="7" className="px-6 py-10 text-center text-gray-400">
+                                    사고 데이터 없음
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === "alerts" && (
+                    <div className="space-y-4 animate-fade-in">
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden">
+                        <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl">
+                          <div className="flex items-center gap-2 font-bold text-gray-800">
+                            <Icon name="bell" size={18} /> 알림센터
+                          </div>
+                        </div>
+                        <div className="p-6 space-y-2">
+                          {alertItems.length === 0 ? (
+                            <div className="text-sm text-gray-400 text-center py-6">알림 없음</div>
+                          ) : (
+                            alertItems.map((a, idx) => (
+                              <div
+                                key={idx}
+                                className={`p-4 rounded-lg border text-sm ${
+                                  a.level === "high"
+                                    ? "border-red-100 bg-red-50 text-red-700"
+                                    : a.level === "medium"
+                                      ? "border-orange-100 bg-orange-50 text-orange-700"
+                                      : "border-blue-100 bg-blue-50 text-blue-700"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <span>{a.msg}</span>
+                                  <span
+                                    className={`text-[11px] font-bold px-2 py-1 rounded bg-white ${
+                                      a.level === "high"
+                                        ? "text-red-600"
+                                        : a.level === "medium"
+                                          ? "text-orange-600"
+                                          : "text-blue-600"
+                                    }`}
+                                  >
+                                    {a.level === "high"
+                                      ? "긴급"
+                                      : a.level === "medium"
+                                        ? "주의"
+                                        : "안내"}
+                                  </span>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === "reports" && (
+                    <div className="space-y-6 animate-fade-in">
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 no-print">
+                        <div className="flex items-center justify-between">
+                          <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                            <Icon name="file-text" size={18} /> 리포트 센터
+                          </h3>
+                          <button
+                            onClick={() => window.print()}
+                            className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm flex gap-1 items-center"
+                          >
+                            <Icon name="printer" size={16} /> 인쇄/PDF
+                          </button>
+                        </div>
+                      </div>
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                        <h4 className="text-xl font-bold text-gray-900">
+                          {dashboardYear}년 보험·차량 운영 보고서
+                        </h4>
+                        <p className="text-xs text-gray-500 mt-1">
+                          생성일시: {new Date().toLocaleString("ko-KR")}
+                        </p>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-5 mb-5">
+                          <div className="p-3 rounded-lg border bg-white">
+                            <div className="text-xs text-gray-500">보험 비용</div>
+                            <div className="text-lg font-bold text-gray-700">
+                              {formatCurrency(stats.tic)}
+                            </div>
+                          </div>
+                          <div className="p-3 rounded-lg border bg-white">
+                            <div className="text-xs text-gray-500">차량 운용 연환산</div>
+                            <div className="text-lg font-bold text-gray-700">
+                              {formatCurrency(stats.tvm * 12)}
+                            </div>
+                          </div>
+                          <div className="p-3 rounded-lg border bg-white">
+                            <div className="text-xs text-gray-500">사고 비용</div>
+                            <div className="text-lg font-bold text-gray-700">
+                              {formatCurrency(stats.tac)}
+                            </div>
+                          </div>
+                          <div className="p-3 rounded-lg border bg-white">
+                            <div className="text-xs text-gray-500">총합</div>
+                            <div className="text-lg font-bold text-gray-700">
+                              {formatCurrency(stats.tic + stats.tvm * 12 + stats.tac)}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                          <div className="border rounded-lg overflow-hidden">
+                            <div className="px-4 py-2 bg-gray-50 border-b text-sm font-bold">
+                              만기 임박 목록
+                            </div>
+                            <table className="w-full text-sm">
+                              <thead className="bg-gray-50 text-gray-500">
+                                <tr>
+                                  <th className="px-3 py-2 text-left">구분</th>
+                                  <th className="px-3 py-2 text-left">대상</th>
+                                  <th className="px-3 py-2 text-left">만기일</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {[
+                                  ...stats.ei.map((i) => ({
+                                    t: "보험",
+                                    name: i.name,
+                                    d: i.endDate,
+                                  })),
+                                  ...stats.ev.map((v) => ({
+                                    t: "차량",
+                                    name: v.plateNumber,
+                                    d: v.contractEnd,
+                                  })),
+                                ]
+                                  .slice(0, 10)
+                                  .map((r, idx) => (
+                                    <tr key={idx}>
+                                      <td className="px-3 py-2">{r.t}</td>
+                                      <td className="px-3 py-2">{r.name}</td>
+                                      <td className="px-3 py-2">{formatDate(r.d)}</td>
+                                    </tr>
+                                  ))}
+                                {stats.ei.length + stats.ev.length === 0 && (
+                                  <tr>
+                                    <td colSpan="3" className="px-3 py-6 text-center text-gray-400">
+                                      데이터 없음
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className="border rounded-lg overflow-hidden">
+                            <div className="px-4 py-2 bg-gray-50 border-b text-sm font-bold">
+                              미정산 사고 목록
+                            </div>
+                            <table className="w-full text-sm">
+                              <thead className="bg-gray-50 text-gray-500">
+                                <tr>
+                                  <th className="px-3 py-2 text-left">발생일</th>
+                                  <th className="px-3 py-2 text-left">차량</th>
+                                  <th className="px-3 py-2 text-right">금액</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {accidents
+                                  .filter((a) => {
+                                    const c = claims.find((x) => x.accidentId === a.id);
+                                    return !c || c.status !== "지급완료";
+                                  })
+                                  .slice(0, 10)
+                                  .map((a) => (
+                                    <tr key={a.id}>
+                                      <td className="px-3 py-2">{formatDate(a.date)}</td>
+                                      <td className="px-3 py-2">{a.plateNumber}</td>
+                                      <td className="px-3 py-2 text-right">
+                                        {formatCurrency(a.totalCost || a.repairCost || 0)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                {accidents.filter((a) => {
+                                  const c = claims.find((x) => x.accidentId === a.id);
+                                  return !c || c.status !== "지급완료";
+                                }).length === 0 && (
+                                  <tr>
+                                    <td colSpan="3" className="px-3 py-6 text-center text-gray-400">
+                                      데이터 없음
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === "documents" && (
+                    <div className="space-y-6 animate-fade-in">
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden">
+                        <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl">
+                          <div className="flex items-center gap-2 font-bold text-gray-800">
+                            <Icon name="folder-open" size={18} /> 증빙 문서함
+                          </div>
+                        </div>
+                        <div className="p-5 grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
+                          <select
+                            value={documentForm.category}
+                            onChange={(e) =>
+                              setDocumentForm({ ...documentForm, category: e.target.value })
+                            }
+                            className="border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700"
+                          >
+                            <option>보험증권</option>
+                            <option>차량계약서</option>
+                            <option>사고합의서</option>
+                            <option>수리견적서</option>
+                            <option>기타</option>
+                          </select>
+                          <input
+                            value={documentForm.title}
+                            onChange={(e) =>
+                              setDocumentForm({ ...documentForm, title: e.target.value })
+                            }
+                            placeholder="문서명"
+                            className="border border-gray-300 rounded px-3 py-2 text-sm md:col-span-2 bg-white text-gray-700"
+                          />
+                          <input
+                            value={documentForm.relatedKey}
+                            onChange={(e) =>
+                              setDocumentForm({ ...documentForm, relatedKey: e.target.value })
+                            }
+                            placeholder="연관키(차량번호/증권명)"
+                            className="border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700"
+                          />
+                          <input
+                            value={documentForm.link}
+                            onChange={(e) =>
+                              setDocumentForm({ ...documentForm, link: e.target.value })
+                            }
+                            placeholder="링크(URL/경로)"
+                            className="border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700"
+                          />
+                          <button
+                            onClick={async () => {
+                              await handleSaveDocument(documentForm);
+                              setDocumentForm({
+                                category: "보험증권",
+                                title: "",
+                                relatedType: "",
+                                relatedKey: "",
+                                link: "",
+                                memo: "",
+                              });
+                            }}
+                            className="bg-slate-800 text-white px-3 py-2 rounded text-sm flex gap-1 items-center justify-center"
+                          >
+                            <Icon name="plus" size={16} /> 등록
+                          </button>
+                          <input
+                            value={documentForm.memo}
+                            onChange={(e) =>
+                              setDocumentForm({ ...documentForm, memo: e.target.value })
+                            }
+                            placeholder="메모"
+                            className="border border-gray-300 rounded px-3 py-2 text-sm md:col-span-6 bg-white text-gray-700"
+                          />
+                        </div>
+                      </div>
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                        <table className="w-full text-sm text-left text-gray-500">
+                          <thead className="bg-gray-50 text-gray-700 uppercase text-xs">
+                            <tr>
+                              <th className="px-6 py-3 text-left">분류</th>
+                              <th className="px-6 py-3 text-left">문서명</th>
+                              <th className="px-6 py-3 text-left">연관키</th>
+                              <th className="px-6 py-3 text-left">링크</th>
+                              <th className="px-6 py-3 text-right">관리</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {documents.map((d) => {
+                              const safeLink = sanitizeLink(d.link);
+                              return (
+                                <tr key={d.id}>
+                                  <td className="px-6 py-4">{d.category}</td>
+                                  <td className="px-6 py-4">
+                                    <div className="font-medium text-gray-700">{d.title}</div>
+                                    <div className="text-xs text-gray-500">{d.memo || "-"}</div>
+                                  </td>
+                                  <td className="px-6 py-4">{d.relatedKey || "-"}</td>
+                                  <td className="px-6 py-4">
+                                    {safeLink ? (
+                                      <a
+                                        className="text-blue-600 hover:text-blue-800 underline"
+                                        href={safeLink}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                      >
+                                        열기
+                                      </a>
+                                    ) : d.link ? (
+                                      <span className="text-xs text-red-500">유효하지 않은 링크</span>
+                                    ) : (
+                                      "-"
+                                    )}
+                                  </td>
+                                  <td className="px-6 py-4 text-right">
+                                    <button
+                                      onClick={() => handleDeleteDocument(d.id)}
+                                      className="inline-flex items-center gap-1 text-red-500 hover:text-red-700 text-xs font-semibold"
+                                    >
+                                      <Icon name="trash-2" size={14} />
+                                      삭제
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                            {documents.length === 0 && (
+                              <tr>
+                                <td colSpan="5" className="px-6 py-8 text-center text-gray-400">
+                                  등록된 문서 없음
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === "partners" && (
+                    <div className="space-y-6 animate-fade-in">
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full overflow-hidden">
+                        <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl">
+                          <div className="flex items-center gap-2 font-bold text-gray-800">
+                            <Icon name="building-2" size={18} /> 업체/계약처 관리
+                          </div>
+                        </div>
+                        <div className="p-5 grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
+                          <select
+                            value={partnerForm.category}
+                            onChange={(e) =>
+                              setPartnerForm({ ...partnerForm, category: e.target.value })
+                            }
+                            className="border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700"
+                          >
+                            <option>보험사</option>
+                            <option>렌트사</option>
+                            <option>정비업체</option>
+                            <option>기타협력사</option>
+                          </select>
+                          <input
+                            value={partnerForm.name}
+                            onChange={(e) =>
+                              setPartnerForm({ ...partnerForm, name: e.target.value })
+                            }
+                            placeholder="업체명"
+                            className="border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700"
+                          />
+                          <input
+                            value={partnerForm.manager}
+                            onChange={(e) =>
+                              setPartnerForm({ ...partnerForm, manager: e.target.value })
+                            }
+                            placeholder="담당자"
+                            className="border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700"
+                          />
+                          <input
+                            value={partnerForm.phone}
+                            onChange={(e) =>
+                              setPartnerForm({ ...partnerForm, phone: e.target.value })
+                            }
+                            placeholder="연락처"
+                            className="border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700"
+                          />
+                          <input
+                            value={partnerForm.contact}
+                            onChange={(e) =>
+                              setPartnerForm({ ...partnerForm, contact: e.target.value })
+                            }
+                            placeholder="이메일/연락수단"
+                            className="border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700"
+                          />
+                          <button
+                            onClick={async () => {
+                              await handleSavePartner(partnerForm);
+                              setPartnerForm({
+                                category: "보험사",
+                                name: "",
+                                contact: "",
+                                manager: "",
+                                phone: "",
+                                note: "",
+                              });
+                            }}
+                            className="bg-slate-800 text-white px-3 py-2 rounded text-sm flex gap-1 items-center justify-center"
+                          >
+                            <Icon name="plus" size={16} /> 등록
+                          </button>
+                          <input
+                            value={partnerForm.note}
+                            onChange={(e) =>
+                              setPartnerForm({ ...partnerForm, note: e.target.value })
+                            }
+                            placeholder="비고"
+                            className="border border-gray-300 rounded px-3 py-2 text-sm md:col-span-6 bg-white text-gray-700"
+                          />
+                        </div>
+                      </div>
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                        <table className="w-full text-sm text-left text-gray-500">
+                          <thead className="bg-gray-50 text-gray-700 uppercase text-xs">
+                            <tr>
+                              <th className="px-6 py-3 text-left">분류</th>
+                              <th className="px-6 py-3 text-left">업체명</th>
+                              <th className="px-6 py-3 text-left">담당자</th>
+                              <th className="px-6 py-3 text-left">연락처</th>
+                              <th className="px-6 py-3 text-left">기타</th>
+                              <th className="px-6 py-3 text-right">관리</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {partners.map((p) => (
+                              <tr key={p.id}>
+                                <td className="px-6 py-4">{p.category}</td>
+                                <td className="px-6 py-4 font-medium text-gray-700">{p.name}</td>
+                                <td className="px-6 py-4">{p.manager || "-"}</td>
+                                <td className="px-6 py-4">{p.phone || "-"}</td>
+                                <td className="px-6 py-4 text-xs text-gray-500">
+                                  {p.contact || p.note || "-"}
+                                </td>
+                                <td className="px-6 py-4 text-right">
+                                  <button
+                                    onClick={() => handleDeletePartner(p.id)}
+                                    className="inline-flex items-center gap-1 text-red-500 hover:text-red-700 text-xs font-semibold"
+                                  >
+                                    <Icon name="trash-2" size={14} />
+                                    삭제
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                            {partners.length === 0 && (
+                              <tr>
+                                <td colSpan="6" className="px-6 py-8 text-center text-gray-400">
+                                  등록된 업체 없음
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {["insurance", "vehicle", "accident"].includes(activeTab) && (
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-full animate-fade-in">
+                      <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl">
+                        <div className="flex items-center gap-2 font-bold text-gray-800">
+                          <Icon
+                            name={
+                              activeTab === "insurance"
+                                ? "shield-check"
+                                : activeTab === "vehicle"
+                                  ? "car"
+                                  : "alert-triangle"
+                            }
+                          />
+                          {activeTab === "insurance"
+                            ? "보험 목록"
+                            : activeTab === "vehicle"
+                              ? "차량 목록"
+                              : "사고 내역"}
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleFileUpload(activeTab + "s")}
+                            className="bg-green-600 text-white px-3 py-1.5 rounded text-sm flex gap-1 items-center"
+                          >
+                            <Icon name="upload" size={16} /> 업로드
+                          </button>
+                          <button
+                            onClick={() => downloadCSV(filteredRows, activeTab + "s")}
+                            className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm flex gap-1 items-center"
+                          >
+                            <Icon name="download" size={16} /> 다운로드
+                          </button>
+                          <div className="w-px bg-gray-300 mx-1"></div>
+                          <button
+                            onClick={() => handleOpenAdd(activeTab)}
+                            className="bg-slate-800 text-white px-3 py-1.5 rounded text-sm flex gap-1 items-center"
+                          >
+                            <Icon name="plus" size={16} /> 등록
+                          </button>
+                        </div>
+                      </div>
+                      <div className="px-5 py-3 border-b border-gray-100 bg-white">
+                        <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                          <input
+                            type="text"
+                            value={listKeyword}
+                            onChange={(e) => setListKeyword(e.target.value)}
+                            placeholder={
+                              activeTab === "insurance"
+                                ? "검색: 증권명/보험사/피보험물"
+                                : activeTab === "vehicle"
+                                  ? "검색: 차량번호/모델/운전자"
+                                  : "검색: 차량번호/운전자/내용"
+                            }
+                            className="border border-gray-300 rounded px-3 py-2 text-sm md:col-span-2"
+                          />
+                          <input
+                            type="date"
+                            value={listDateFrom}
+                            onChange={(e) => setListDateFrom(e.target.value)}
+                            className="border border-gray-300 rounded px-3 py-2 text-sm"
+                          />
+                          <input
+                            type="date"
+                            value={listDateTo}
+                            onChange={(e) => setListDateTo(e.target.value)}
+                            className="border border-gray-300 rounded px-3 py-2 text-sm"
+                          />
+                          <select
+                            value={listSort}
+                            onChange={(e) => setListSort(e.target.value)}
+                            className="border border-gray-300 rounded px-3 py-2 text-sm"
+                          >
+                            {activeTab === "insurance" && (
+                              <>
+                                <option value="endDate_asc">정렬: 만기일 빠른순</option>
+                                <option value="date_desc">정렬: 만기일 늦은순</option>
+                                <option value="cost_desc">정렬: 금액 높은순</option>
+                                <option value="cost_asc">정렬: 금액 낮은순</option>
+                                <option value="name_asc">정렬: 증권명순</option>
+                              </>
+                            )}
+                            {activeTab === "vehicle" && (
+                              <>
+                                <option value="contractEnd_asc">정렬: 만기일 빠른순</option>
+                                <option value="date_desc">정렬: 만기일 늦은순</option>
+                                <option value="cost_desc">정렬: 월비용 높은순</option>
+                                <option value="cost_asc">정렬: 월비용 낮은순</option>
+                                <option value="plate_asc">정렬: 차량번호순</option>
+                              </>
+                            )}
+                            {activeTab === "accident" && (
+                              <>
+                                <option value="date_desc">정렬: 발생일 최신순</option>
+                                <option value="date_asc">정렬: 발생일 오래된순</option>
+                                <option value="cost_desc">정렬: 비용 높은순</option>
+                                <option value="cost_asc">정렬: 비용 낮은순</option>
+                                <option value="plate_asc">정렬: 차량번호순</option>
+                              </>
+                            )}
+                          </select>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-2">
+                          조회 결과: {filteredRows.length}건
+                        </div>
+                      </div>
+                      <div className="overflow-auto flex-1">
+                        <table className="w-full text-sm text-left text-gray-500">
+                          <thead className="bg-gray-50 text-gray-700 uppercase text-xs">
+                            <tr>
+                              {activeTab === "insurance" ? (
+                                <>
+                                  <th className="px-6 py-3">종류</th>
+                                  <th className="px-6 py-3">증권명</th>
+                                  <th className="px-6 py-3">피보험물</th>
+                                  <th className="px-6 py-3">상태</th>
+                                  <th className="px-6 py-3">만기일</th>
+                                  <th className="px-6 py-3 text-right">금액</th>
+                                </>
+                              ) : activeTab === "vehicle" ? (
+                                <>
+                                  <th className="px-6 py-3">차량번호</th>
+                                  <th className="px-6 py-3">모델</th>
+                                  <th className="px-6 py-3">형태(업체)</th>
+                                  <th className="px-6 py-3">운전자</th>
+                                  <th className="px-6 py-3 text-right">월비용</th>
+                                </>
+                              ) : (
+                                <>
+                                  <th className="px-6 py-3">발생일</th>
+                                  <th className="px-6 py-3">차량</th>
+                                  <th className="px-6 py-3">내용</th>
+                                  <th className="px-6 py-3">처리상태</th>
+                                  <th className="px-6 py-3 text-right">총비용</th>
+                                </>
+                              )}
+                              <th className="px-6 py-3 text-center">관리</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {activeTab === "insurance" &&
+                              filteredRows.map((i) => (
+                                <tr key={i.id} className="border-b hover:bg-gray-50">
+                                  <td className="px-6 py-4">{i.type}</td>
+                                  <td className="px-6 py-4">{i.name}</td>
+                                  <td className="px-6 py-4">
+                                    <button
+                                      onClick={() => handleViewInsuranceHistory(i)}
+                                      className="text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                                    >
+                                      {i.insuredObject}
+                                    </button>
+                                  </td>
+                                  <td className="px-6 py-4">
+                                    {(
+                                      i.isCurrent !== undefined
+                                        ? i.isCurrent
+                                        : insuranceCurrentMap[i.id]
+                                    ) ? (
+                                      <span className="px-2 py-1 rounded text-xs bg-emerald-100 text-emerald-700 font-semibold">
+                                        현재
+                                      </span>
+                                    ) : (
+                                      <span className="px-2 py-1 rounded text-xs bg-slate-100 text-slate-600 font-semibold">
+                                        이력
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-6 py-4">{formatDate(i.endDate)}</td>
+                                  <td className="px-6 py-4 text-right">
+                                    {formatCurrency(i.amount)}
+                                  </td>
+                                  <td className="px-6 py-4 text-center">
+                                    <button
+                                      onClick={() => handleEdit(i, "insurance")}
+                                      className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-700 mr-3 text-xs font-semibold"
+                                    >
+                                      <Icon name="edit" size={14} />
+                                      수정
+                                    </button>
+                                    <button
+                                      onClick={() => handleRenewInsurance(i)}
+                                      className="inline-flex items-center gap-1 text-emerald-600 hover:text-emerald-800 mr-3 text-xs font-semibold"
+                                    >
+                                      <Icon name="refresh-cw" size={14} />
+                                      갱신
+                                    </button>
+                                    <button
+                                      onClick={() => handleDelete("insurances", i.id)}
+                                      className="inline-flex items-center gap-1 text-red-500 hover:text-red-700 text-xs font-semibold"
+                                    >
+                                      <Icon name="trash-2" size={14} />
+                                      삭제
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            {activeTab === "vehicle" &&
+                              filteredRows.map((v) => (
+                                <tr key={v.id} className="border-b hover:bg-gray-50">
+                                  <td className="px-6 py-4 font-bold">{v.plateNumber}</td>
+                                  <td className="px-6 py-4">{v.model}</td>
+                                  <td className="px-6 py-4">
+                                    <span className="bg-slate-100 px-2 py-1 rounded text-xs">
+                                      {v.ownershipType}
+                                    </span>
+                                    {v.provider && (
+                                      <span className="text-xs text-gray-500 ml-1">
+                                        ({v.provider})
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-6 py-4">{v.driver}</td>
+                                  <td className="px-6 py-4 text-right">
+                                    {formatCurrency(v.monthlyCost)}
+                                  </td>
+                                  <td className="px-6 py-4 text-center">
+                                    <button
+                                      onClick={() => handleEdit(v, "vehicle")}
+                                      className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-700 mr-3 text-xs font-semibold"
+                                    >
+                                      <Icon name="edit" size={14} />
+                                      수정
+                                    </button>
+                                    <button
+                                      onClick={() => handleDelete("vehicles", v.id)}
+                                      className="inline-flex items-center gap-1 text-red-500 hover:text-red-700 text-xs font-semibold"
+                                    >
+                                      <Icon name="trash-2" size={14} />
+                                      삭제
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            {activeTab === "accident" &&
+                              filteredRows.map((a) => (
+                                <tr key={a.id} className="border-b hover:bg-gray-50">
+                                  <td className="px-6 py-4">{formatDate(a.date)}</td>
+                                  <td className="px-6 py-4">{a.plateNumber}</td>
+                                  <td className="px-6 py-4 truncate max-w-xs">{a.description}</td>
+                                  <td className="px-6 py-4">
+                                    <span
+                                      className={`px-2 py-1 rounded text-xs ${a.insuranceClaimed === "처리완료" ? "bg-blue-100 text-blue-700" : "bg-gray-100"}`}
+                                    >
+                                      {a.insuranceClaimed}
+                                    </span>
+                                  </td>
+                                  <td className="px-6 py-4 text-right">
+                                    <button
+                                      onClick={() => handleViewCostDetail(a)}
+                                      className="font-bold text-red-500 hover:text-red-700 hover:underline"
+                                    >
+                                      {formatCurrency(a.totalCost || a.repairCost)}
+                                    </button>
+                                  </td>
+                                  <td className="px-6 py-4 text-center">
+                                    <button
+                                      onClick={() => handleEdit(a, "accident")}
+                                      className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-700 mr-3 text-xs font-semibold"
+                                    >
+                                      <Icon name="edit" size={14} />
+                                      수정
+                                    </button>
+                                    <button
+                                      onClick={() => handleDelete("accidents", a.id)}
+                                      className="inline-flex items-center gap-1 text-red-500 hover:text-red-700 text-xs font-semibold"
+                                    >
+                                      <Icon name="trash-2" size={14} />
+                                      삭제
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            {filteredRows.length === 0 && (
+                              <tr>
+                                <td
+                                  colSpan={activeTab === "insurance" ? 7 : 6}
+                                  className="px-6 py-10 text-center text-gray-400"
+                                >
+                                  조건에 맞는 데이터가 없습니다.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </main>
+
+            {isModalOpen && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                <div
+                  className={`bg-white rounded-xl shadow-2xl w-full overflow-hidden animate-fade-in-up ${modalType === "insuranceHistory" ? "max-w-5xl" : "max-w-md"}`}
+                >
+                  <div className="bg-slate-800 p-4 text-white flex justify-between">
+                    <h3 className="font-bold flex items-center gap-2">
+                      <Icon
+                        name={
+                          modalType === "password"
+                            ? "key"
+                            : modalType === "costDetail"
+                              ? "file-text"
+                              : modalType === "insuranceHistory"
+                                ? "history"
+                                : editId
+                                  ? "edit"
+                                  : "plus"
+                        }
+                        size={18}
+                      />
+                      {modalType === "password"
+                        ? "비밀번호 변경"
+                        : modalType === "costDetail"
+                          ? "사고 비용 상세"
+                          : modalType === "insuranceHistory"
+                            ? "피보험물 보험 이력"
+                            : modalType === "insuranceRenew"
+                              ? "보험 갱신 등록"
+                              : editId
+                                ? "정보 수정"
+                                : "신규 등록"}
+                    </h3>
+                    <button
+                      onClick={() => {
+                        setIsModalOpen(false);
+                        setRenewSource(null);
+                      }}
+                    >
+                      <Icon name="x" />
+                    </button>
+                  </div>
+                  {modalType === "password" ? (
+                    <form onSubmit={handlePasswordChange} className="p-6 space-y-4">
+                      <input
+                        type="password"
+                        placeholder="새 비밀번호"
+                        className="w-full border p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={formData.newPassword || ""}
+                        onChange={(e) => setFormData({ ...formData, newPassword: e.target.value })}
+                        required
+                      />
+                      <input
+                        type="password"
+                        placeholder="비밀번호 확인"
+                        className="w-full border p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={formData.confirmPassword || ""}
+                        onChange={(e) =>
+                          setFormData({ ...formData, confirmPassword: e.target.value })
+                        }
+                        required
+                      />
+                      <button className="w-full bg-slate-800 text-white py-3 rounded-lg font-bold">
+                        변경 저장
+                      </button>
+                    </form>
+                  ) : modalType === "costDetail" ? (
+                    <div className="p-6">
+                      <div className="space-y-4 text-sm">
+                        <div className="flex justify-between p-3 bg-gray-50 rounded-lg">
+                          <span className="text-gray-600">수리비</span>
+                          <span className="font-bold text-gray-800">
+                            {formatCurrency(formData.repairCost || 0)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between p-3 bg-gray-50 rounded-lg">
+                          <span className="text-gray-600">자차 부담금</span>
+                          <span className="font-bold text-gray-800">
+                            {formatCurrency(formData.deductible || 0)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between p-3 bg-blue-50 rounded-lg border border-blue-100">
+                          <span className="text-blue-600">대인 배상</span>
+                          <span className="font-bold text-blue-800">
+                            {formatCurrency(formData.insurancePerson || 0)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between p-3 bg-blue-50 rounded-lg border border-blue-100">
+                          <span className="text-blue-600">대물 배상</span>
+                          <span className="font-bold text-blue-800">
+                            {formatCurrency(formData.insuranceProperty || 0)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between p-4 bg-slate-800 text-white rounded-lg mt-4 shadow-sm">
+                          <span className="font-medium">총 합계</span>
+                          <span className="font-bold text-lg">
+                            {formatCurrency(formData.totalCost || 0)}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setIsModalOpen(false)}
+                        className="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-bold mt-6 hover:bg-gray-300 transition-colors"
+                      >
+                        닫기
+                      </button>
+                    </div>
+                  ) : modalType === "insuranceHistory" ? (
+                    <div className="p-6">
+                      <div className="mb-3 text-sm text-gray-700">
+                        <span className="font-bold">피보험물:</span>{" "}
+                        {formData.selectedInsurance?.insuredObject || "-"}
+                      </div>
+                      <div className="max-h-[55vh] overflow-auto border border-gray-200 rounded-lg">
+                        <table className="w-full text-sm text-left">
+                          <thead className="bg-gray-50 text-gray-500">
+                            <tr>
+                              <th className="px-3 py-2">증권명</th>
+                              <th className="px-3 py-2">보험사</th>
+                              <th className="px-3 py-2">기간</th>
+                              <th className="px-3 py-2">상태</th>
+                              <th className="px-3 py-2 text-right">금액</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {(formData.insuranceHistoryRows || []).map((row) => {
+                              const current =
+                                row.isCurrent !== undefined
+                                  ? row.isCurrent
+                                  : insuranceCurrentMap[row.id];
+                              return (
+                                <tr key={row.id} className="hover:bg-gray-50">
+                                  <td className="px-3 py-2 whitespace-nowrap">{row.name}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap">{row.company}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap">
+                                    {formatDate(row.startDate)} ~ {formatDate(row.endDate)}
+                                  </td>
+                                  <td className="px-3 py-2 whitespace-nowrap">
+                                    {current ? (
+                                      <span className="px-2 py-1 rounded text-[10px] bg-emerald-100 text-emerald-700 font-semibold">
+                                        현재
+                                      </span>
+                                    ) : (
+                                      <span className="px-2 py-1 rounded text-[10px] bg-slate-100 text-slate-600 font-semibold">
+                                        이력
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-2 text-right font-semibold whitespace-nowrap">
+                                    {formatCurrency(row.amount || 0)}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                            {(!formData.insuranceHistoryRows ||
+                              formData.insuranceHistoryRows.length === 0) && (
+                              <tr>
+                                <td colSpan="5" className="px-3 py-8 text-center text-gray-400">
+                                  이력 데이터가 없습니다.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                      <button
+                        onClick={() => setIsModalOpen(false)}
+                        className="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-bold mt-6 hover:bg-gray-300 transition-colors"
+                      >
+                        닫기
+                      </button>
+                    </div>
+                  ) : (
+                    <form
+                      onSubmit={handleSave}
+                      className="p-6 space-y-4 max-h-[70vh] overflow-y-auto"
+                    >
+                      {(modalType === "insurance" || modalType === "insuranceRenew") && (
+                        <>
+                          <div className="grid grid-cols-2 gap-3">
+                            <select
+                              className="w-full border p-2 rounded"
+                              value={formData.type || ""}
+                              onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                              required
+                            >
+                              <option value="">종류 선택</option>
+                              <option value="화재보험">화재보험</option>
+                              <option value="자동차보험">자동차보험</option>
+                              <option value="배상책임">배상책임</option>
+                              <option value="기타">기타</option>
+                            </select>
+                            <input
+                              type="text"
+                              placeholder="보험사"
+                              className="w-full border p-2 rounded"
+                              value={formData.company || ""}
+                              onChange={(e) =>
+                                setFormData({ ...formData, company: e.target.value })
+                              }
+                              required
+                            />
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="증권명"
+                            className="w-full border p-2 rounded"
+                            value={formData.name || ""}
+                            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                            required
+                          />
+                          <input
+                            type="text"
+                            placeholder="피보험물 (대상)"
+                            className="w-full border p-2 rounded"
+                            value={formData.insuredObject || ""}
+                            onChange={(e) =>
+                              setFormData({ ...formData, insuredObject: e.target.value })
+                            }
+                            required
+                          />
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="text-xs text-gray-500">시작일</label>
+                              <input
+                                type="date"
+                                className="w-full border p-2 rounded"
+                                value={formData.startDate || ""}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, startDate: e.target.value })
+                                }
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs text-gray-500">만기일</label>
+                              <input
+                                type="date"
+                                className="w-full border p-2 rounded"
+                                value={formData.endDate || ""}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, endDate: e.target.value })
+                                }
+                              />
+                            </div>
+                          </div>
+                          <input
+                            type="number"
+                            placeholder="연간 보험료 (원)"
+                            className="w-full border p-2 rounded"
+                            value={formData.amount || ""}
+                            onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                            required
+                          />
+                        </>
+                      )}
+                      {modalType === "vehicle" && (
+                        <>
+                          <div className="grid grid-cols-2 gap-3">
+                            <input
+                              type="text"
+                              placeholder="차량번호"
+                              className="w-full border p-2 rounded"
+                              value={formData.plateNumber || ""}
+                              onChange={(e) =>
+                                setFormData({ ...formData, plateNumber: e.target.value })
+                              }
+                              required
+                            />
+                            <input
+                              type="text"
+                              placeholder="모델"
+                              className="w-full border p-2 rounded"
+                              value={formData.model || ""}
+                              onChange={(e) => setFormData({ ...formData, model: e.target.value })}
+                              required
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <select
+                              className="w-full border p-2 rounded"
+                              value={formData.ownershipType || ""}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setFormData({
+                                  ...formData,
+                                  ownershipType: v,
+                                  monthlyCost: v === "자차" ? 0 : formData.monthlyCost,
+                                  provider: v === "자차" ? "" : formData.provider,
+                                });
+                              }}
+                              required
+                            >
+                              <option value="">소유형태</option>
+                              <option value="자차">자차</option>
+                              <option value="리스">리스</option>
+                              <option value="렌트">렌트</option>
+                            </select>
+                            <input
+                              type="text"
+                              placeholder="운전자"
+                              className="w-full border p-2 rounded"
+                              value={formData.driver || ""}
+                              onChange={(e) => setFormData({ ...formData, driver: e.target.value })}
+                            />
+                          </div>
+                          {formData.ownershipType && formData.ownershipType !== "자차" && (
+                            <input
+                              type="text"
+                              placeholder="리스/렌트 업체명 (예: 롯데렌터카)"
+                              className="w-full border p-2 rounded bg-blue-50"
+                              value={formData.provider || ""}
+                              onChange={(e) =>
+                                setFormData({ ...formData, provider: e.target.value })
+                              }
+                            />
+                          )}
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="text-xs text-gray-500">월 비용</label>
+                              <input
+                                type="number"
+                                className="w-full border p-2 rounded"
+                                disabled={formData.ownershipType === "자차"}
+                                value={formData.monthlyCost || ""}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, monthlyCost: e.target.value })
+                                }
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs text-gray-500">계약 만료</label>
+                              <input
+                                type="date"
+                                className="w-full border p-2 rounded"
+                                disabled={formData.ownershipType === "자차"}
+                                value={formData.contractEnd || ""}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, contractEnd: e.target.value })
+                                }
+                              />
+                            </div>
+                          </div>
+                        </>
+                      )}
+                      {modalType === "accident" && (
+                        <>
+                          <select
+                            className="w-full border p-2 rounded"
+                            value={formData.vehicleId || ""}
+                            onChange={(e) => {
+                              const v = vehicles.find((x) => x.id === e.target.value);
+                              setFormData({
+                                ...formData,
+                                vehicleId: e.target.value,
+                                plateNumber: v?.plateNumber,
+                              });
+                            }}
+                            required
+                          >
+                            <option value="">차량 선택</option>
+                            {vehicles.map((v) => (
+                              <option key={v.id} value={v.id}>
+                                {v.plateNumber}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="grid grid-cols-2 gap-3">
+                            <input
+                              type="date"
+                              className="w-full border p-2 rounded"
+                              value={formData.date || ""}
+                              onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                              required
+                            />
+                            <input
+                              type="text"
+                              placeholder="운전자"
+                              className="w-full border p-2 rounded"
+                              value={formData.driver || ""}
+                              onChange={(e) => setFormData({ ...formData, driver: e.target.value })}
+                              required
+                            />
+                          </div>
+                          <textarea
+                            placeholder="사고 내용 상세"
+                            className="w-full border p-2 rounded h-20"
+                            value={formData.description || ""}
+                            onChange={(e) =>
+                              setFormData({ ...formData, description: e.target.value })
+                            }
+                            required
+                          ></textarea>
+                          <div className="bg-gray-50 p-3 rounded border border-gray-200">
+                            <p className="text-xs font-bold text-gray-500 mb-2">비용 상세 (원)</p>
+                            <div className="grid grid-cols-2 gap-2 text-sm">
+                              <input
+                                type="number"
+                                placeholder="수리비"
+                                className="border p-2 rounded"
+                                value={formData.repairCost || ""}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, repairCost: e.target.value })
+                                }
+                              />
+                              <input
+                                type="number"
+                                placeholder="자차부담금"
+                                className="border p-2 rounded"
+                                value={formData.deductible || ""}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, deductible: e.target.value })
+                                }
+                              />
+                              <input
+                                type="number"
+                                placeholder="대인배상"
+                                className="border p-2 rounded"
+                                value={formData.insurancePerson || ""}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, insurancePerson: e.target.value })
+                                }
+                              />
+                              <input
+                                type="number"
+                                placeholder="대물배상"
+                                className="border p-2 rounded"
+                                value={formData.insuranceProperty || ""}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, insuranceProperty: e.target.value })
+                                }
+                              />
+                            </div>
+                          </div>
+                          <select
+                            className="w-full border p-2 rounded"
+                            value={formData.insuranceClaimed || "미처리"}
+                            onChange={(e) =>
+                              setFormData({ ...formData, insuranceClaimed: e.target.value })
+                            }
+                          >
+                            <option>미처리</option>
+                            <option>처리완료</option>
+                            <option>진행중</option>
+                          </select>
+                        </>
+                      )}
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsModalOpen(false);
+                            setFormData({});
+                            setEditId(null);
+                            setRenewSource(null);
+                          }}
+                          className="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-bold hover:bg-gray-300 transition-colors"
+                        >
+                          취소
+                        </button>
+                        <button className="w-full bg-slate-800 text-white py-3 rounded-lg font-bold hover:bg-slate-700 transition-colors shadow-lg">
+                          {modalType === "insuranceRenew"
+                            ? "갱신 저장"
+                            : editId
+                              ? "수정 완료"
+                              : "저장하기"}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+      const root = createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>

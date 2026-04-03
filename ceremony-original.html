@@ -1,0 +1,2236 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>경조사 관리대장 Pro</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Firebase (Compat for CDN + Babel) -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-analytics-compat.js"></script>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            background-color: #F8FAFC;
+            color: #1E293B;
+            overflow-x: hidden;
+        }
+
+        /* Animated Background */
+        .aurora-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: 
+                radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 0%, rgba(139, 92, 246, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(16, 185, 129, 0.1) 0px, transparent 50%),
+                radial-gradient(at 0% 100%, rgba(59, 130, 246, 0.1) 0px, transparent 50%);
+            z-index: -1;
+            filter: blur(40px);
+            animation: aurora 15s ease infinite alternate;
+        }
+
+        @keyframes aurora {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.1); }
+        }
+        
+        /* Glassmorphism & Utilities */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.9);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 10px 15px -3px rgba(0, 0, 0, 0.05);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        
+        .glass-panel:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .animate-fade-in {
+            animation: fadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Print Styles - Layout Optimization */
+        @media print {
+            body { 
+                background: white; 
+                color: black; 
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+                font-size: 12px;
+            }
+            .aurora-bg, aside, nav, button, .no-print { display: none !important; }
+            main { margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: none !important; }
+            
+            .glass-panel { 
+                box-shadow: none !important; 
+                border: 1px solid #ddd !important; 
+                break-inside: avoid; 
+                background: white !important;
+                padding: 1rem !important;
+            }
+            
+            h2 { font-size: 16pt !important; color: black !important; margin-bottom: 10px !important; }
+            h3 { font-size: 14pt !important; }
+            h4 { font-size: 12pt !important; }
+            
+            th, td { border-bottom: 1px solid #eee !important; padding: 8px !important; }
+            
+            .print-grid-4 { display: grid !important; grid-template-columns: repeat(4, 1fr) !important; gap: 10px !important; }
+            .print-grid-3 { display: grid !important; grid-template-columns: 2fr 1fr !important; gap: 10px !important; }
+        }
+    </style>
+</head>
+<body>
+    <div class="aurora-bg"></div>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- Firebase Init ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBfT58Y9XwjalTk0E0NPBWqkVVVOWN9zFQ",
+            authDomain: "officeflow-one.firebaseapp.com",
+            projectId: "officeflow-one",
+            storageBucket: "officeflow-one.firebasestorage.app",
+            messagingSenderId: "1084176732785",
+            appId: "1:1084176732785:web:56e241ddcdb69afdf101d0",
+            measurementId: "G-SYP4NQMGP7"
+        };
+
+        let db = null;
+        let auth = null;
+        let officeFlowSession = null;
+        const resolveSessionUid = () => auth?.currentUser?.uid || officeFlowSession?.uid || '';
+        const resolveSessionEmail = () => auth?.currentUser?.email || officeFlowSession?.email || '';
+        const resolveSessionRole = () => officeFlowSession?.role || 'member';
+        const resolveSessionProvider = () => auth?.currentUser?.providerData?.[0]?.providerId || officeFlowSession?.provider || '';
+        const buildOwnedDocKey = (entityId) => {
+            const ownerUid = resolveSessionUid();
+            return ownerUid ? `${ownerUid}_${entityId}` : String(entityId);
+        };
+        try {
+            if (!firebase.apps.length) {
+                firebase.initializeApp(firebaseConfig);
+            }
+            if (firebase.analytics) firebase.analytics();
+            db = firebase.firestore();
+            auth = firebase.auth();
+            try {
+                const raw = window.parent && window.parent !== window
+                    ? window.parent.localStorage.getItem('officeflow-one-mvp-state')
+                    : localStorage.getItem('officeflow-one-mvp-state');
+                officeFlowSession = raw ? JSON.parse(raw)?.session || null : null;
+            } catch (e) {
+                officeFlowSession = null;
+            }
+        } catch (e) {
+            console.error("Firebase initialization failed:", e);
+        }
+
+        // --- Icons ---
+        const IconDashboard = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>;
+        const IconPlus = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>;
+        const IconSettings = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>;
+        const IconTrash = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>;
+        const IconFlower = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>;
+        const IconTrendingUp = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>;
+        const IconSearch = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>;
+        const IconDownload = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>;
+        const IconEdit = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.586a2 2 0 112.828 2.828L11.828 14H9v-2.828l8.586-8.586z"/></svg>;
+        const IconCloud = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 15a4 4 0 014-4h1a5 5 0 019.7 1.6A3.5 3.5 0 0117.5 20H7a4 4 0 01-4-4z"/></svg>;
+        const IconWallet = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h14a2 2 0 002-2v-5m0 0h-4a2 2 0 110-4h4m0 4v-4"/></svg>;
+        const IconBell = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>;
+        const IconReport = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-6m3 6V7m3 10v-3M7 3h10a2 2 0 012 2v14a2 2 0 01-2 2H7a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>;
+
+        // --- Data Models ---
+        const DEFAULT_REGULATIONS = [
+            { id: 1, type: '결혼 (본인)', amount: 1000000, days: 5, wreath: true, category: 'happy' },
+            { id: 2, type: '결혼 (자녀)', amount: 500000, days: 1, wreath: true, category: 'happy' },
+            { id: 3, type: '사망 (부모/배우자)', amount: 500000, days: 5, wreath: true, category: 'sad' },
+            { id: 4, type: '사망 (조부모)', amount: 200000, days: 2, wreath: false, category: 'sad' },
+            { id: 5, type: '출산', amount: 300000, days: 90, wreath: true, category: 'happy' },
+        ];
+
+        // --- Utilities ---
+        const formatCurrency = (amount) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(amount);
+        const safeJsonParse = (raw, fallback) => {
+            try {
+                return raw ? JSON.parse(raw) : fallback;
+            } catch {
+                return fallback;
+            }
+        };
+        const UI_STORAGE_KEYS = {
+            historyPresets: 'corp_event_history_presets_v1',
+            lastBackupAt: 'corp_event_last_backup_at_v1',
+            alertReads: 'corp_event_alert_reads_v1'
+        };
+
+        // --- Chart Components (SVG) ---
+        const SimpleBarChart = ({ data }) => {
+            const max = Math.max(...data.map(d => d.value), 1);
+            const chartHeightPx = 120;
+            return (
+                <div className="flex items-end space-x-2 h-40 pt-4">
+                    {data.map((d, i) => {
+                        const rawHeightPx = (d.value / max) * chartHeightPx;
+                        const barHeightPx = d.value > 0 ? Math.max(rawHeightPx, 14) : 0;
+                        return (
+                        <div key={i} className="flex-1 flex flex-col items-center group cursor-pointer">
+                            <div className="w-full bg-gradient-to-t from-blue-400 to-blue-300 rounded-t-md relative transition-all duration-300 group-hover:from-blue-600 group-hover:to-blue-500 group-hover:scale-y-105 origin-bottom shadow-sm" style={{ height: `${barHeightPx}px` }}>
+                                <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] py-1 px-2 rounded whitespace-nowrap z-10 transition-opacity">
+                                    {formatCurrency(d.value)}
+                                </div>
+                            </div>
+                            <span className="text-[10px] text-slate-500 mt-2 font-medium">{d.label}</span>
+                        </div>
+                    )})}
+                </div>
+            );
+        };
+
+        const SimpleCountBarChart = ({ data }) => {
+            const max = Math.max(...data.map(d => d.value), 1);
+            const chartHeightPx = 120;
+            return (
+                <div className="flex items-end space-x-2 h-40 pt-4">
+                    {data.map((d, i) => {
+                        const rawHeightPx = (d.value / max) * chartHeightPx;
+                        const barHeightPx = d.value > 0 ? Math.max(rawHeightPx, 10) : 0;
+                        return (
+                        <div key={i} className="flex-1 flex flex-col items-center group cursor-pointer">
+                            <div className="w-full bg-gradient-to-t from-indigo-400 to-indigo-300 rounded-t-md relative transition-all duration-300 group-hover:from-indigo-600 group-hover:to-indigo-500 group-hover:scale-y-105 origin-bottom shadow-sm" style={{ height: `${barHeightPx}px` }}>
+                                <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] py-1 px-2 rounded whitespace-nowrap z-10 transition-opacity">
+                                    {d.value}건
+                                </div>
+                            </div>
+                            <span className="text-[10px] text-slate-500 mt-2 font-medium">{d.label}</span>
+                        </div>
+                    )})}
+                </div>
+            );
+        };
+
+        const SimpleHorizontalBarChart = ({ data }) => {
+            const max = Math.max(...data.map(d => d.value), 1);
+            return (
+                <div className="space-y-3">
+                    {data.length === 0 ? (
+                        <div className="text-xs text-slate-400 py-6 text-center">부서 데이터 없음</div>
+                    ) : (
+                        data.map((d, i) => {
+                            const widthPct = (d.value / max) * 100;
+                            return (
+                                <div key={i}>
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className="text-xs font-semibold text-slate-600 truncate max-w-[140px]">{d.label}</span>
+                                        <span className="text-xs font-bold text-slate-700">{formatCurrency(d.value)}</span>
+                                    </div>
+                                    <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                                        <div
+                                            className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-600"
+                                            style={{ width: `${Math.max(widthPct, 4)}%` }}
+                                        ></div>
+                                    </div>
+                                </div>
+                            );
+                        })
+                    )}
+                </div>
+            );
+        };
+
+        const SimpleDonutChart = ({ data }) => {
+            let cumulativePercent = 0;
+            const total = data.reduce((a, b) => a + b.value, 0);
+            
+            if(total === 0) return <div className="h-32 flex items-center justify-center text-slate-400 text-xs">데이터 없음</div>;
+
+            const slices = data.map((d, i) => {
+                const percent = d.value / total;
+                const startX = Math.cos(2 * Math.PI * cumulativePercent);
+                const startY = Math.sin(2 * Math.PI * cumulativePercent);
+                cumulativePercent += percent;
+                const endX = Math.cos(2 * Math.PI * cumulativePercent);
+                const endY = Math.sin(2 * Math.PI * cumulativePercent);
+                const largeArcFlag = percent > 0.5 ? 1 : 0;
+                
+                const pathData = `M ${startX} ${startY} A 1 1 0 ${largeArcFlag} 1 ${endX} ${endY} L 0 0`;
+                return { path: pathData, color: d.color, label: d.label, percent: (percent * 100).toFixed(1) };
+            });
+
+            return (
+                <div className="flex items-center justify-center gap-8">
+                    <div className="relative w-32 h-32 drop-shadow-lg">
+                        <svg viewBox="-1 -1 2 2" className="transform -rotate-90 w-full h-full overflow-visible">
+                            {slices.map((s, i) => (
+                                <path key={i} d={s.path} fill={s.color} stroke="white" strokeWidth="0.05" className="hover:opacity-90 transition-opacity cursor-pointer" />
+                            ))}
+                            <circle cx="0" cy="0" r="0.6" fill="white" />
+                        </svg>
+                        <div className="absolute inset-0 flex items-center justify-center flex-col">
+                             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total</span>
+                             <span className="text-sm font-black text-slate-700">{data.length} types</span>
+                        </div>
+                    </div>
+                    <div className="space-y-2">
+                        {data.map((d, i) => (
+                            <div key={i} className="flex items-center text-xs">
+                                <span className="w-2.5 h-2.5 rounded-full mr-2 shadow-sm" style={{backgroundColor: d.color}}></span>
+                                <span className="text-slate-600 font-medium w-20 truncate">{d.label}</span>
+                                <span className="text-slate-400">{((d.value/total)*100).toFixed(0)}%</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Main Components ---
+
+        const DashboardView = ({ events }) => {
+            const currentYear = new Date().getFullYear();
+            const availableYears = useMemo(() => {
+                const years = events
+                    .map(e => e.date ? new Date(e.date).getFullYear() : null)
+                    .filter(y => Number.isFinite(y));
+                if (years.length === 0) return [currentYear];
+                const set = new Set(years);
+                set.add(currentYear);
+                return Array.from(set).sort((a, b) => b - a);
+            }, [events, currentYear]);
+            const [selectedYear, setSelectedYear] = useState(currentYear);
+            const [reportTemplate, setReportTemplate] = useState('yearly');
+            const yearFilteredEvents = useMemo(
+                () => events.filter(e => e.date && e.date.startsWith(String(selectedYear))),
+                [events, selectedYear]
+            );
+            
+            // Analytics Logic
+            const analytics = useMemo(() => {
+                const thisYearEvents = yearFilteredEvents;
+                const totalAmount = thisYearEvents.reduce((sum, e) => sum + Number(e.amount), 0);
+                
+                // Monthly Data
+                const monthlyData = Array.from({length: 12}, (_, i) => {
+                    const month = String(i + 1).padStart(2, '0');
+                    const monthSum = thisYearEvents
+                        .filter(e => e.date.startsWith(`${selectedYear}-${month}`))
+                        .reduce((sum, e) => sum + Number(e.amount), 0);
+                    return { label: `${i+1}월`, value: monthSum };
+                });
+
+                const monthlyCountData = Array.from({length: 12}, (_, i) => {
+                    const month = String(i + 1).padStart(2, '0');
+                    const monthCount = thisYearEvents.filter(e => e.date.startsWith(`${selectedYear}-${month}`)).length;
+                    return { label: `${i+1}월`, value: monthCount };
+                });
+
+                // Category Data
+                const typeDataRaw = thisYearEvents.reduce((acc, curr) => {
+                    acc[curr.type] = (acc[curr.type] || 0) + Number(curr.amount);
+                    return acc;
+                }, {});
+                
+                const typeData = Object.keys(typeDataRaw).map((key, index) => ({
+                    label: key, 
+                    value: typeDataRaw[key],
+                    color: ['#3B82F6', '#10B981', '#8B5CF6', '#EC4899', '#F59E0B'][index % 5]
+                }));
+
+                const deptDataRaw = thisYearEvents.reduce((acc, curr) => {
+                    const dept = curr.deptName || '미지정';
+                    acc[dept] = (acc[dept] || 0) + Number(curr.amount);
+                    return acc;
+                }, {});
+                const deptData = Object.keys(deptDataRaw)
+                    .map((k) => ({ label: k, value: deptDataRaw[k] }))
+                    .sort((a, b) => b.value - a.value)
+                    .slice(0, 8);
+
+                const wreathCount = thisYearEvents.filter(e => e.wreath).length;
+                const avgCost = thisYearEvents.length > 0 ? totalAmount / thisYearEvents.length : 0;
+
+                return { totalAmount, count: thisYearEvents.length, monthlyData, monthlyCountData, typeData, deptData, wreathCount, avgCost };
+            }, [yearFilteredEvents, selectedYear]);
+
+            const currentMonth = new Date().getMonth() + 1;
+            const monthIndexWithData = analytics.monthlyCountData.reduce((lastIdx, m, idx) => (m.value > 0 ? idx : lastIdx), -1);
+            const effectiveMonth = monthIndexWithData >= 0 ? (monthIndexWithData + 1) : (selectedYear === currentYear ? currentMonth : 12);
+            const effectiveQuarter = Math.ceil(effectiveMonth / 3);
+            const reportEvents = useMemo(() => {
+                if (reportTemplate === 'yearly') return yearFilteredEvents;
+                if (reportTemplate === 'quarterly') {
+                    return yearFilteredEvents.filter(e => {
+                        const m = Number(String(e.date || '').split('-')[1] || 0);
+                        return m >= (effectiveQuarter - 1) * 3 + 1 && m <= effectiveQuarter * 3;
+                    });
+                }
+                return yearFilteredEvents.filter(e => {
+                    const m = Number(String(e.date || '').split('-')[1] || 0);
+                    return m === effectiveMonth;
+                });
+            }, [yearFilteredEvents, reportTemplate, effectiveQuarter, effectiveMonth]);
+
+            const reportAmount = reportEvents.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+            const reportCount = reportEvents.length;
+
+            useEffect(() => {
+                if (!availableYears.includes(selectedYear)) {
+                    setSelectedYear(availableYears[0] || currentYear);
+                }
+            }, [availableYears, selectedYear, currentYear]);
+
+            // Print Functionality
+            const handlePrint = () => {
+                window.print();
+            };
+
+            // CSV Export
+            const handleExportCSV = () => {
+                if (reportEvents.length === 0) return alert('다운로드할 데이터가 없습니다.');
+                
+                const headers = "발생일자,부서명,사원명,경조사유형,지원금,휴가일수,화환여부,메모\n";
+                const rows = reportEvents.map(e => 
+                    `${e.date},${e.deptName || '-'},${e.empName},${e.type},${e.amount},${e.days},${e.wreath ? 'Y':'N'},${(e.memo || '').replace(/,/g, ' ')}`
+                ).join("\n");
+                
+                const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + headers + rows;
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", `경조사관리대장_${selectedYear}_${reportTemplate}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const reportGeneratedAt = new Date().toLocaleString('ko-KR');
+
+            return (
+                <div className="animate-fade-in space-y-6 pb-24 md:pb-0">
+                    <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 print:hidden">
+                        <div>
+                            <h2 className="text-3xl font-bold text-slate-800 tracking-tight">경영 지표 대시보드</h2>
+                            <p className="text-sm text-slate-500 mt-1">
+                                <span className="font-semibold text-blue-600">{selectedYear}년</span> 실시간 경조사비 운영 현황 리포트
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2 no-print items-center justify-end">
+                            <select
+                                value={selectedYear}
+                                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                                className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm text-slate-700"
+                            >
+                                {availableYears.map(y => <option key={y} value={y}>{y}년</option>)}
+                            </select>
+                            <select
+                                value={reportTemplate}
+                                onChange={(e) => setReportTemplate(e.target.value)}
+                                className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm text-slate-700"
+                            >
+                                <option value="monthly">월간 보고서</option>
+                                <option value="quarterly">분기 보고서</option>
+                                <option value="yearly">연간 보고서</option>
+                            </select>
+                            <button 
+                                onClick={handleExportCSV}
+                                className="px-4 py-2 bg-white border border-slate-200 text-slate-600 text-sm font-medium rounded-xl shadow-sm hover:bg-slate-50 transition-colors flex items-center gap-2 group"
+                            >
+                                <div className="p-1 bg-green-100 rounded text-green-700 group-hover:bg-green-200 transition-colors"><IconDownload /></div>
+                                Excel 다운로드
+                            </button>
+                             <button 
+                                onClick={handlePrint}
+                                className="px-4 py-2 bg-slate-800 text-white text-sm font-medium rounded-xl shadow-lg hover:bg-slate-700 transition-all flex items-center gap-2"
+                             >
+                                🖨️ 보고서 출력
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* KPI Cards: 인쇄 시 4열 강제 (print-grid-4) */}
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 print:hidden">
+                        <div className="glass-panel p-6 rounded-2xl relative overflow-hidden group border-l-4 border-blue-500">
+                            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity transform group-hover:scale-110 duration-500">
+                                <IconTrendingUp />
+                            </div>
+                            <p className="text-slate-500 text-xs font-bold uppercase tracking-wide">누적 지출액 (YTD)</p>
+                            <h3 className="text-3xl font-black text-slate-800 mt-2 tracking-tight">{formatCurrency(analytics.totalAmount)}</h3>
+                            <p className="text-xs text-blue-600 mt-3 flex items-center font-medium bg-blue-50 w-fit px-2 py-1 rounded">
+                                전년 동기 대비 증가세
+                            </p>
+                        </div>
+                        <div className="glass-panel p-6 rounded-2xl border-l-4 border-indigo-500">
+                            <p className="text-slate-500 text-xs font-bold uppercase tracking-wide">총 발생 건수</p>
+                            <h3 className="text-3xl font-black text-slate-800 mt-2 tracking-tight">{analytics.count}<span className="text-lg text-slate-400 font-medium ml-1">건</span></h3>
+                            <p className="text-xs text-slate-400 mt-3">월 평균 {(analytics.count / (new Date().getMonth() + 1)).toFixed(1)}건 처리 중</p>
+                        </div>
+                        <div className="glass-panel p-6 rounded-2xl border-l-4 border-emerald-500">
+                            <p className="text-slate-500 text-xs font-bold uppercase tracking-wide">건당 평균 지원금</p>
+                            <h3 className="text-3xl font-black text-slate-800 mt-2 tracking-tight">{formatCurrency(analytics.avgCost)}</h3>
+                            <div className="w-full bg-slate-100 h-1.5 rounded-full mt-4 overflow-hidden">
+                                <div
+                                    className="bg-emerald-500 h-full rounded-full animate-[width_1s_ease-out]"
+                                    style={{
+                                        width: analytics.avgCost > 0
+                                            ? `${Math.min((analytics.avgCost / 1000000) * 100, 100)}%`
+                                            : '0%'
+                                    }}
+                                ></div>
+                            </div>
+                        </div>
+                        <div className="glass-panel p-6 rounded-2xl border-l-4 border-purple-500">
+                            <p className="text-slate-500 text-xs font-bold uppercase tracking-wide">화환 발송 건수</p>
+                            <h3 className="text-3xl font-black text-slate-800 mt-2 tracking-tight">{analytics.wreathCount}<span className="text-lg text-slate-400 font-medium ml-1">건</span></h3>
+                            <p className="text-xs text-purple-600 mt-3 font-medium">전체 신청의 {((analytics.wreathCount/analytics.count || 0)*100).toFixed(0)}% 화환 지원</p>
+                        </div>
+                    </div>
+
+                    {/* Analytics Section: 인쇄 시 3열 강제 (print-grid-3) */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 print:hidden">
+                        {/* Monthly Trend */}
+                        <div className="lg:col-span-2 glass-panel p-6 rounded-2xl">
+                            <h4 className="font-bold text-slate-800 mb-6 flex items-center gap-2 text-lg">
+                                <span className="w-1.5 h-6 bg-blue-500 rounded-full"></span>
+                                월별 지출 추이
+                            </h4>
+                            <div className="bg-white/50 rounded-xl p-4 border border-white/50">
+                                <SimpleBarChart data={analytics.monthlyData} />
+                            </div>
+                        </div>
+
+                        {/* Cost Composition */}
+                        <div className="glass-panel p-6 rounded-2xl">
+                            <h4 className="font-bold text-slate-800 mb-6 flex items-center gap-2 text-lg">
+                                <span className="w-1.5 h-6 bg-indigo-500 rounded-full"></span>
+                                지출 유형 분석
+                            </h4>
+                            <div className="bg-white/50 rounded-xl p-4 border border-white/50 flex items-center justify-center h-48">
+                                <SimpleDonutChart data={analytics.typeData} />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Additional Analytics */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 print:hidden">
+                        <div className="lg:col-span-2 glass-panel p-6 rounded-2xl">
+                            <h4 className="font-bold text-slate-800 mb-6 flex items-center gap-2 text-lg">
+                                <span className="w-1.5 h-6 bg-indigo-500 rounded-full"></span>
+                                월별 신청 건수
+                            </h4>
+                            <div className="bg-white/50 rounded-xl p-4 border border-white/50">
+                                <SimpleCountBarChart data={analytics.monthlyCountData} />
+                            </div>
+                        </div>
+                        <div className="glass-panel p-6 rounded-2xl">
+                            <h4 className="font-bold text-slate-800 mb-6 flex items-center gap-2 text-lg">
+                                <span className="w-1.5 h-6 bg-emerald-500 rounded-full"></span>
+                                부서별 지출 TOP 8
+                            </h4>
+                            <div className="bg-white/50 rounded-xl p-4 border border-white/50">
+                                <SimpleHorizontalBarChart data={analytics.deptData} />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Print-only Report Layout */}
+                    <div className="hidden print:block">
+                        <div style={{border: '1px solid #dbeafe', background: '#eff6ff', borderRadius: '10px', padding: '12px 14px', marginBottom: '12px'}}>
+                            <h2 style={{fontSize: '19px', fontWeight: '800', marginBottom: '2px', color: '#1e3a8a'}}>경조사 지원금 운영 브리프</h2>
+                            <p style={{fontSize: '12px', color: '#475569'}}>기준연도 {selectedYear}년 · 템플릿 {reportTemplate === 'yearly' ? '연간' : (reportTemplate === 'quarterly' ? `${effectiveQuarter}분기` : `${effectiveMonth}월`)} · 생성일시 {reportGeneratedAt}</p>
+                            <p style={{fontSize: '12px', color: '#334155', marginTop: '6px'}}>
+                                선택 기간 기준 {reportCount}건, 총 {formatCurrency(reportAmount)} 집행되었습니다.
+                                연간 누적은 {formatCurrency(analytics.totalAmount)}입니다.
+                            </p>
+                        </div>
+
+                        <div style={{display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '12px'}}>
+                            <div style={{border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px', background: '#f8fafc'}}>
+                                <div style={{fontSize: '10px', color: '#64748b'}}>총 지출액</div>
+                                <div style={{fontSize: '14px', fontWeight: '700', color: '#0f172a'}}>{formatCurrency(analytics.totalAmount)}</div>
+                            </div>
+                            <div style={{border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px', background: '#f8fafc'}}>
+                                <div style={{fontSize: '10px', color: '#64748b'}}>총 건수</div>
+                                <div style={{fontSize: '14px', fontWeight: '700', color: '#0f172a'}}>{analytics.count}건</div>
+                            </div>
+                            <div style={{border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px', background: '#f8fafc'}}>
+                                <div style={{fontSize: '10px', color: '#64748b'}}>평균 지원금</div>
+                                <div style={{fontSize: '14px', fontWeight: '700', color: '#0f172a'}}>{formatCurrency(analytics.avgCost)}</div>
+                            </div>
+                            <div style={{border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px', background: '#f8fafc'}}>
+                                <div style={{fontSize: '10px', color: '#64748b'}}>화환 건수</div>
+                                <div style={{fontSize: '14px', fontWeight: '700', color: '#0f172a'}}>{analytics.wreathCount}건</div>
+                            </div>
+                        </div>
+
+                        <div style={{display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '10px', marginBottom: '12px'}}>
+                            <div style={{border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px'}}>
+                                <h3 style={{fontSize: '13px', fontWeight: '700', marginBottom: '6px', color: '#1e293b'}}>월별 지출 집계</h3>
+                                <table className="w-full text-left text-sm">
+                                    <thead>
+                                        <tr>
+                                            <th className="px-2 py-1.5">월</th>
+                                            <th className="px-2 py-1.5 text-right">지출액</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {analytics.monthlyData.map((m, idx) => (
+                                            <tr key={idx}>
+                                                <td className="px-2 py-1.5">{m.label}</td>
+                                                <td className="px-2 py-1.5 text-right">{formatCurrency(m.value)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div style={{border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px'}}>
+                                <h3 style={{fontSize: '13px', fontWeight: '700', marginBottom: '6px', color: '#1e293b'}}>유형별 비중</h3>
+                                <table className="w-full text-left text-sm">
+                                    <thead>
+                                        <tr>
+                                            <th className="px-2 py-1.5">유형</th>
+                                            <th className="px-2 py-1.5 text-right">비중</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {analytics.typeData.length === 0 ? (
+                                            <tr><td colSpan="2" className="px-2 py-2 text-center text-slate-500">데이터 없음</td></tr>
+                                        ) : (
+                                            analytics.typeData.map((t, idx) => (
+                                                <tr key={idx}>
+                                                    <td className="px-2 py-1.5">{t.label}</td>
+                                                    <td className="px-2 py-1.5 text-right">{((t.value / (analytics.totalAmount || 1)) * 100).toFixed(1)}%</td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <h3 style={{fontSize: '13px', fontWeight: '700', margin: '0 0 6px 0', color: '#1e293b'}}>신청 이력 상세 (선택 템플릿 기준)</h3>
+                        <table className="w-full text-left text-sm">
+                            <thead>
+                                <tr>
+                                    <th className="px-3 py-2">발생일</th>
+                                    <th className="px-3 py-2">부서</th>
+                                    <th className="px-3 py-2">사원명</th>
+                                    <th className="px-3 py-2">유형</th>
+                                    <th className="px-3 py-2 text-right">휴가</th>
+                                    <th className="px-3 py-2 text-right">화환</th>
+                                    <th className="px-3 py-2 text-right">지원금</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {reportEvents.length === 0 ? (
+                                    <tr><td colSpan="7" className="px-3 py-3 text-center text-slate-500">해당 연도 데이터 없음</td></tr>
+                                ) : (
+                                    reportEvents.map((e) => (
+                                        <tr key={e.id}>
+                                            <td className="px-3 py-2">{e.date}</td>
+                                            <td className="px-3 py-2">{e.deptName || '-'}</td>
+                                            <td className="px-3 py-2">{e.empName}</td>
+                                            <td className="px-3 py-2">{e.type}</td>
+                                            <td className="px-3 py-2 text-right">{e.days}일</td>
+                                            <td className="px-3 py-2 text-right">{e.wreath ? 'Y' : 'N'}</td>
+                                            <td className="px-3 py-2 text-right">{formatCurrency(e.amount)}</td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+
+        const HistoryView = ({ events, onEditEvent, onDeleteEvent }) => {
+            const currentYear = new Date().getFullYear();
+            const availableYears = useMemo(() => {
+                const years = events
+                    .map(e => e.date ? new Date(e.date).getFullYear() : null)
+                    .filter(y => Number.isFinite(y));
+                if (years.length === 0) return [currentYear];
+                const set = new Set(years);
+                set.add(currentYear);
+                return Array.from(set).sort((a, b) => b - a);
+            }, [events, currentYear]);
+
+            const [selectedYear, setSelectedYear] = useState(currentYear);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [pageSize, setPageSize] = useState(20);
+            const [currentPage, setCurrentPage] = useState(1);
+            const [deptFilter, setDeptFilter] = useState('');
+            const [typeFilter, setTypeFilter] = useState('');
+            const [wreathFilter, setWreathFilter] = useState('all');
+            const [minAmount, setMinAmount] = useState('');
+            const [maxAmount, setMaxAmount] = useState('');
+            const [sortKey, setSortKey] = useState('date_desc');
+            const [presetName, setPresetName] = useState('');
+            const [presets, setPresets] = useState(() => safeJsonParse(localStorage.getItem(UI_STORAGE_KEYS.historyPresets), []));
+
+            useEffect(() => {
+                if (!availableYears.includes(selectedYear)) {
+                    setSelectedYear(availableYears[0] || currentYear);
+                }
+            }, [availableYears, selectedYear, currentYear]);
+
+            const deptOptions = useMemo(
+                () => Array.from(new Set(events.map(e => String(e.deptName || '').trim()).filter(Boolean))).sort(),
+                [events]
+            );
+            const typeOptions = useMemo(
+                () => Array.from(new Set(events.map(e => String(e.type || '').trim()).filter(Boolean))).sort(),
+                [events]
+            );
+
+            useEffect(() => {
+                localStorage.setItem(UI_STORAGE_KEYS.historyPresets, JSON.stringify(presets));
+            }, [presets]);
+
+            const normalizedSearch = searchTerm.trim().toLowerCase();
+            const filtered = useMemo(() => {
+                return events
+                    .filter(e => e.date && e.date.startsWith(String(selectedYear)))
+                    .filter(e => {
+                        if (!normalizedSearch) return true;
+                        return (
+                            String(e.empName || '').toLowerCase().includes(normalizedSearch) ||
+                            String(e.deptName || '').toLowerCase().includes(normalizedSearch) ||
+                            String(e.type || '').toLowerCase().includes(normalizedSearch) ||
+                            String(e.date || '').toLowerCase().includes(normalizedSearch) ||
+                            String(e.memo || '').toLowerCase().includes(normalizedSearch)
+                        );
+                    })
+                    .filter(e => !deptFilter || e.deptName === deptFilter)
+                    .filter(e => !typeFilter || e.type === typeFilter)
+                    .filter(e => {
+                        if (wreathFilter === 'all') return true;
+                        return wreathFilter === 'yes' ? Boolean(e.wreath) : !Boolean(e.wreath);
+                    })
+                    .filter(e => {
+                        const amount = Number(e.amount || 0);
+                        if (minAmount !== '' && amount < Number(minAmount)) return false;
+                        if (maxAmount !== '' && amount > Number(maxAmount)) return false;
+                        return true;
+                    })
+                    .sort((a, b) => {
+                        if (sortKey === 'amount_desc') return Number(b.amount || 0) - Number(a.amount || 0);
+                        if (sortKey === 'amount_asc') return Number(a.amount || 0) - Number(b.amount || 0);
+                        if (sortKey === 'name_asc') return String(a.empName || '').localeCompare(String(b.empName || ''), 'ko');
+                        return new Date(b.date) - new Date(a.date);
+                    });
+            }, [events, selectedYear, normalizedSearch, deptFilter, typeFilter, wreathFilter, minAmount, maxAmount, sortKey]);
+
+            useEffect(() => { setCurrentPage(1); }, [selectedYear, searchTerm, pageSize, deptFilter, typeFilter, wreathFilter, minAmount, maxAmount, sortKey]);
+
+            const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+            const page = Math.min(currentPage, totalPages);
+            const startIdx = (page - 1) * pageSize;
+            const pageRows = filtered.slice(startIdx, startIdx + pageSize);
+
+            const saveCurrentPreset = () => {
+                const name = presetName.trim();
+                if (!name) return alert('프리셋 이름을 입력해주세요.');
+                const payload = {
+                    name,
+                    selectedYear,
+                    searchTerm,
+                    deptFilter,
+                    typeFilter,
+                    wreathFilter,
+                    minAmount,
+                    maxAmount,
+                    sortKey,
+                    pageSize
+                };
+                setPresets(prev => [...prev.filter(p => p.name !== name), payload]);
+                setPresetName('');
+            };
+
+            const applyPreset = (name) => {
+                const preset = presets.find(p => p.name === name);
+                if (!preset) return;
+                setSelectedYear(Number(preset.selectedYear || currentYear));
+                setSearchTerm(preset.searchTerm || '');
+                setDeptFilter(preset.deptFilter || '');
+                setTypeFilter(preset.typeFilter || '');
+                setWreathFilter(preset.wreathFilter || 'all');
+                setMinAmount(preset.minAmount ?? '');
+                setMaxAmount(preset.maxAmount ?? '');
+                setSortKey(preset.sortKey || 'date_desc');
+                setPageSize(Number(preset.pageSize) || 20);
+            };
+
+            const deletePreset = (name) => {
+                setPresets(prev => prev.filter(p => p.name !== name));
+            };
+
+            return (
+                <div className="animate-fade-in space-y-6 pb-24 md:pb-0">
+                    <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                            <h2 className="text-3xl font-bold text-slate-800 tracking-tight">경조사 신청 이력</h2>
+                            <p className="text-sm text-slate-500 mt-1">연도별 신청 내역을 검색하고 페이지 단위로 관리합니다.</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <select
+                                value={selectedYear}
+                                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                                className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm text-slate-700"
+                            >
+                                {availableYears.map(y => <option key={y} value={y}>{y}년</option>)}
+                            </select>
+                            <select
+                                value={pageSize}
+                                onChange={(e) => setPageSize(Number(e.target.value))}
+                                className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm text-slate-700"
+                            >
+                                <option value={10}>10개씩</option>
+                                <option value={20}>20개씩</option>
+                                <option value={50}>50개씩</option>
+                            </select>
+                        </div>
+                    </header>
+
+                    <div className="glass-panel rounded-2xl overflow-hidden shadow-sm">
+                        <div className="px-6 py-5 border-b border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4 bg-white/80">
+                            <h4 className="font-bold text-slate-800 text-lg">{selectedYear}년 신청 목록</h4>
+                            <div className="relative w-full md:w-72">
+                                <input
+                                    type="text"
+                                    placeholder="사원명, 부서명, 유형, 메모 검색..."
+                                    className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm transition-all"
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                />
+                                <div className="absolute left-3 top-2.5 text-slate-400"><IconSearch /></div>
+                            </div>
+                        </div>
+                        <div className="px-6 py-4 border-b border-slate-100 bg-white/70 grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-2">
+                            <select value={deptFilter} onChange={(e) => setDeptFilter(e.target.value)} className="px-3 py-2 rounded-lg border border-slate-200 text-sm">
+                                <option value="">전체 부서</option>
+                                {deptOptions.map(d => <option key={d} value={d}>{d}</option>)}
+                            </select>
+                            <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="px-3 py-2 rounded-lg border border-slate-200 text-sm">
+                                <option value="">전체 유형</option>
+                                {typeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                            <select value={wreathFilter} onChange={(e) => setWreathFilter(e.target.value)} className="px-3 py-2 rounded-lg border border-slate-200 text-sm">
+                                <option value="all">화환 전체</option>
+                                <option value="yes">화환 있음</option>
+                                <option value="no">화환 없음</option>
+                            </select>
+                            <input type="number" min="0" value={minAmount} onChange={(e) => setMinAmount(e.target.value)} placeholder="최소 금액" className="px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                            <input type="number" min="0" value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)} placeholder="최대 금액" className="px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                            <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} className="px-3 py-2 rounded-lg border border-slate-200 text-sm">
+                                <option value="date_desc">최신순</option>
+                                <option value="amount_desc">금액 높은순</option>
+                                <option value="amount_asc">금액 낮은순</option>
+                                <option value="name_asc">사원명순</option>
+                            </select>
+                            <input value={presetName} onChange={(e) => setPresetName(e.target.value)} placeholder="프리셋 이름" className="px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                            <button onClick={saveCurrentPreset} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold">프리셋 저장</button>
+                        </div>
+                        {presets.length > 0 && (
+                            <div className="px-6 py-3 border-b border-slate-100 bg-white/70 flex flex-wrap items-center gap-2">
+                                {presets.map(p => (
+                                    <div key={p.name} className="inline-flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-full px-2.5 py-1">
+                                        <button onClick={() => applyPreset(p.name)} className="text-xs font-semibold text-slate-700">{p.name}</button>
+                                        <button onClick={() => deletePreset(p.name)} className="text-xs text-slate-400 hover:text-red-500">x</button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-slate-50/80 text-slate-500 text-xs uppercase font-bold tracking-wider">
+                                    <tr>
+                                        <th className="px-6 py-4">신청일</th>
+                                        <th className="px-6 py-4">사원 정보</th>
+                                        <th className="px-6 py-4">구분</th>
+                                        <th className="px-6 py-4">지원 내용</th>
+                                        <th className="px-6 py-4 text-right">금액</th>
+                                        <th className="px-6 py-4 text-right">관리</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 bg-white/60">
+                                    {pageRows.length === 0 ? (
+                                        <tr><td colSpan="6" className="text-center py-12 text-slate-400">검색 결과가 없습니다.</td></tr>
+                                    ) : (
+                                        pageRows.map(event => (
+                                            <tr key={event.id} className="hover:bg-blue-50/50 transition-colors">
+                                                <td className="px-6 py-4 text-slate-600 font-mono text-xs">{event.date}</td>
+                                                <td className="px-6 py-4">
+                                                    <div className="font-bold text-slate-800">{event.empName}</div>
+                                                    <div className="text-xs text-slate-500">{event.deptName || '-'}</div>
+                                                </td>
+                                                <td className="px-6 py-4">{event.type}</td>
+                                                <td className="px-6 py-4 text-xs text-slate-500">
+                                                    <span className="font-medium text-slate-700">휴가 {event.days}일</span>
+                                                    {event.wreath && <span className="ml-2 text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-100">화환</span>}
+                                                </td>
+                                                <td className="px-6 py-4 text-right font-bold text-slate-800 tabular-nums">{formatCurrency(event.amount)}</td>
+                                                <td className="px-6 py-4 text-right">
+                                                    <div className="flex justify-end gap-2">
+                                                        <button onClick={() => onEditEvent(event)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="수정"><IconEdit /></button>
+                                                        <button onClick={() => onDeleteEvent(event.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="삭제"><IconTrash /></button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="px-6 py-4 border-t border-slate-100 bg-white/80 flex flex-col md:flex-row items-center justify-between gap-3">
+                            <p className="text-xs text-slate-500">
+                                총 {filtered.length}건 중 {filtered.length === 0 ? 0 : startIdx + 1}~{Math.min(startIdx + pageSize, filtered.length)}건 표시
+                            </p>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                    disabled={page <= 1}
+                                    className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white disabled:opacity-40"
+                                >
+                                    이전
+                                </button>
+                                <span className="text-xs font-semibold text-slate-600">{page} / {totalPages}</span>
+                                <button
+                                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                    disabled={page >= totalPages}
+                                    className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white disabled:opacity-40"
+                                >
+                                    다음
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            );
+        };
+
+        const RegisterView = ({ regulations, events, eventData, onSave, onCancel, recentInput }) => {
+            const [formData, setFormData] = useState({
+                date: new Date().toISOString().split('T')[0],
+                deptName: '',
+                empName: '',
+                type: '',
+                amount: 0,
+                days: 0,
+                wreath: false,
+                category: '',
+                status: '승인대기',
+                memo: ''
+            });
+            const isEditMode = Boolean(eventData);
+            const deptOptions = useMemo(
+                () => Array.from(new Set(events.map(e => String(e.deptName || '').trim()).filter(Boolean))).sort(),
+                [events]
+            );
+            const empOptions = useMemo(
+                () => Array.from(new Set(events.map(e => String(e.empName || '').trim()).filter(Boolean))).sort(),
+                [events]
+            );
+
+            useEffect(() => {
+                if (eventData) {
+                    setFormData({
+                        date: eventData.date || new Date().toISOString().split('T')[0],
+                        deptName: eventData.deptName || '',
+                        empName: eventData.empName || '',
+                        type: eventData.type || '',
+                        amount: Number(eventData.amount) || 0,
+                        days: Number(eventData.days) || 0,
+                        wreath: Boolean(eventData.wreath),
+                        category: eventData.category || '',
+                        status: eventData.status || '승인대기',
+                        memo: eventData.memo || ''
+                    });
+                } else {
+                    setFormData({
+                        date: new Date().toISOString().split('T')[0],
+                        deptName: '',
+                        empName: '',
+                        type: '',
+                        amount: 0,
+                        days: 0,
+                        wreath: false,
+                        category: '',
+                        status: '승인대기',
+                        memo: ''
+                    });
+                }
+            }, [eventData]);
+
+            const handleTypeChange = (e) => {
+                const selectedType = e.target.value;
+                const rule = regulations.find(r => r.type === selectedType);
+                if (rule) {
+                    setFormData(prev => ({
+                        ...prev,
+                        type: selectedType,
+                        amount: rule.amount,
+                        days: rule.days,
+                        wreath: rule.wreath,
+                        category: rule.category
+                    }));
+                } else {
+                    setFormData(prev => ({ ...prev, type: selectedType }));
+                }
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if(!formData.empName.trim() || !formData.deptName.trim() || !formData.type) {
+                    alert('필수 항목을 모두 입력해주세요.');
+                    return;
+                }
+                if (Number(formData.amount) < 0 || Number(formData.days) < 0) {
+                    alert('금액과 휴가일수는 0 이상이어야 합니다.');
+                    return;
+                }
+                const duplicate = events.some(e =>
+                    e.id !== (eventData?.id || null) &&
+                    String(e.empName || '').trim() === formData.empName.trim() &&
+                    String(e.type || '').trim() === formData.type &&
+                    String(e.date || '').trim() === formData.date
+                );
+                if (duplicate && !confirm('동일 사원/유형/일자의 등록 건이 있습니다. 그래도 저장할까요?')) {
+                    return;
+                }
+                const selectedRule = regulations.find(r => r.type === formData.type);
+                if (selectedRule) {
+                    const amountGap = Math.abs(Number(formData.amount) - Number(selectedRule.amount));
+                    const dayGap = Math.abs(Number(formData.days) - Number(selectedRule.days));
+                    if ((amountGap > 200000 || dayGap > 2) && !confirm('규정값 대비 금액/휴가 편차가 큽니다. 저장할까요?')) {
+                        return;
+                    }
+                }
+                onSave({ ...formData, id: eventData?.id || Date.now() });
+            };
+
+            return (
+                <div className="w-full animate-fade-in pb-24 md:pb-0">
+                    <header className="mb-6">
+                        <h2 className="text-3xl font-bold text-slate-800 tracking-tight">{isEditMode ? '경조사 내역 수정' : '경조사 신규 등록'}</h2>
+                        <p className="text-slate-500 text-sm mt-1">사규에 따른 지원금 및 휴가가 자동 계산됩니다.</p>
+                        {!isEditMode && recentInput && (
+                            <button
+                                type="button"
+                                onClick={() => setFormData(prev => ({ ...prev, deptName: recentInput.deptName || '', empName: recentInput.empName || '' }))}
+                                className="mt-3 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 hover:bg-slate-200"
+                            >
+                                최근 입력값 불러오기
+                            </button>
+                        )}
+                    </header>
+
+                    <form onSubmit={handleSubmit} className="glass-panel p-8 rounded-3xl shadow-xl space-y-8 bg-white/80">
+                        <datalist id="dept-options">
+                            {deptOptions.map(d => <option key={d} value={d} />)}
+                        </datalist>
+                        <datalist id="emp-options">
+                            {empOptions.map(n => <option key={n} value={n} />)}
+                        </datalist>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div className="space-y-2">
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">부서명</label>
+                                <input 
+                                    type="text" 
+                                    required
+                                    list="dept-options"
+                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all bg-white"
+                                    value={formData.deptName}
+                                    onChange={e => setFormData({...formData, deptName: e.target.value})}
+                                    placeholder="예: 인사팀"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">사원명</label>
+                                <input 
+                                    type="text" 
+                                    required
+                                    list="emp-options"
+                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all bg-white"
+                                    value={formData.empName}
+                                    onChange={e => setFormData({...formData, empName: e.target.value})}
+                                    placeholder="이름"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">발생일자</label>
+                                <input 
+                                    type="date" 
+                                    required
+                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all bg-white"
+                                    value={formData.date}
+                                    onChange={e => setFormData({...formData, date: e.target.value})}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">경조사 유형</label>
+                            <div className="relative">
+                                <select 
+                                    required
+                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all bg-white appearance-none"
+                                    value={formData.type}
+                                    onChange={handleTypeChange}
+                                >
+                                    <option value="">유형을 선택하세요</option>
+                                    {regulations.map(reg => (
+                                        <option key={reg.id} value={reg.type}>{reg.type}</option>
+                                    ))}
+                                </select>
+                                <div className="absolute right-4 top-3.5 pointer-events-none text-slate-400">▼</div>
+                            </div>
+                        </div>
+
+                        {/* Auto-calculated Info Card */}
+                        <div className="bg-gradient-to-br from-slate-50 to-blue-50/30 border border-slate-200/60 rounded-2xl p-6 grid grid-cols-3 gap-8 shadow-inner">
+                            <div className="text-center border-r border-slate-200/50">
+                                <p className="text-xs text-slate-500 mb-2 uppercase font-bold">지원금</p>
+                                <p className="font-black text-slate-800 text-2xl tracking-tight">{formatCurrency(formData.amount)}</p>
+                            </div>
+                            <div className="text-center border-r border-slate-200/50">
+                                <p className="text-xs text-slate-500 mb-2 uppercase font-bold">휴가</p>
+                                <p className="font-black text-slate-800 text-2xl tracking-tight">{formData.days}<span className="text-sm font-medium text-slate-400 ml-1">일</span></p>
+                            </div>
+                            <div className="text-center flex flex-col items-center justify-center">
+                                <p className="text-xs text-slate-500 mb-2 uppercase font-bold">화환 지원</p>
+                                {formData.wreath ? (
+                                    <span className="inline-flex items-center gap-1.5 text-purple-700 font-bold text-sm bg-purple-100 px-3 py-1 rounded-full shadow-sm">
+                                        <IconFlower /> 지원됨
+                                    </span>
+                                ) : (
+                                    <span className="text-slate-300 text-sm font-medium">-</span>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">비고 / 메모</label>
+                            <textarea 
+                                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all bg-white h-24 resize-none"
+                                value={formData.memo}
+                                onChange={e => setFormData({...formData, memo: e.target.value})}
+                                placeholder="추가 사항이 있다면 입력해주세요."
+                            ></textarea>
+                        </div>
+
+                        <div className="flex gap-4 pt-4 border-t border-slate-100">
+                            <button 
+                                type="button" 
+                                onClick={() => onCancel('dashboard')}
+                                className="flex-1 py-3.5 border border-slate-200 rounded-xl text-slate-600 font-bold hover:bg-slate-50 transition-all active:scale-95"
+                            >
+                                취소
+                            </button>
+                            <button 
+                                type="submit" 
+                                className="flex-1 py-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-bold hover:shadow-lg hover:shadow-blue-500/30 transition-all transform hover:-translate-y-0.5 active:scale-95"
+                            >
+                                {isEditMode ? '수정 저장' : '저장'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            );
+        };
+
+        const SettingsView = ({ regulations, onSaveRegulation, onDeleteRegulation, onBackupJson, onBackupCsv, onRestoreJson, lastBackupAt }) => {
+            const [isAdding, setIsAdding] = useState(false);
+            const [editId, setEditId] = useState(null);
+            const fileInputRef = useRef(null);
+            
+            // Form State for Add/Edit
+            const [form, setForm] = useState({ type: '', amount: 0, days: 0, wreath: false, category: 'happy' });
+
+            const startAdd = () => {
+                setForm({ type: '', amount: 0, days: 0, wreath: false, category: 'happy' });
+                setIsAdding(true);
+                setEditId(null);
+            };
+
+            const startEdit = (reg) => {
+                setForm({ ...reg });
+                setEditId(reg.id);
+                setIsAdding(false);
+            };
+
+            const handleDelete = async (id) => {
+                if(confirm('정말 이 규정을 삭제하시겠습니까?')) {
+                    await onDeleteRegulation(id);
+                }
+            };
+
+            const handleSave = async () => {
+                const normalizedType = String(form.type || '').trim();
+                if(!normalizedType) return alert("규정명을 입력하세요.");
+                if (Number(form.amount) < 0 || Number(form.days) < 0) return alert("지원금/휴가일수는 0 이상이어야 합니다.");
+                const isDuplicate = regulations.some(r => String(r.type).trim() === normalizedType && r.id !== editId);
+                if (isDuplicate) return alert("동일한 규정명이 이미 존재합니다.");
+                
+                const id = isAdding ? Date.now() : editId;
+                await onSaveRegulation({ ...form, type: normalizedType, id });
+                setIsAdding(false);
+                setEditId(null);
+            };
+
+            return (
+                <div className="animate-fade-in pb-24 md:pb-0">
+                    <header className="mb-8 flex justify-between items-center">
+                        <div>
+                            <h2 className="text-3xl font-bold text-slate-800 tracking-tight">규정 관리 센터</h2>
+                            <p className="text-slate-500 text-sm mt-1">경조사 지급 기준 및 정책을 설정합니다.</p>
+                            <p className="text-xs text-slate-400 mt-2">최근 백업: {lastBackupAt || '없음'}</p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button
+                                onClick={onBackupJson}
+                                className="px-4 py-2.5 rounded-xl text-sm font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                            >
+                                JSON 백업
+                            </button>
+                            <button
+                                onClick={onBackupCsv}
+                                className="px-4 py-2.5 rounded-xl text-sm font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                            >
+                                CSV 백업
+                            </button>
+                            <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept=".json,application/json"
+                                className="hidden"
+                                onChange={(e) => {
+                                    const file = e.target.files && e.target.files[0];
+                                    if (file) onRestoreJson(file);
+                                    e.target.value = '';
+                                }}
+                            />
+                            <button
+                                onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                                className="px-4 py-2.5 rounded-xl text-sm font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                            >
+                                JSON 복원
+                            </button>
+                            <button 
+                                onClick={startAdd}
+                                className="bg-slate-900 text-white px-5 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-slate-800 transition-colors shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+                            >
+                                <IconPlus /> 규정 추가
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* Add/Edit Form Area */}
+                    {(isAdding || editId) && (
+                        <div className="bg-white/90 backdrop-blur p-6 rounded-2xl border border-blue-100 shadow-xl mb-8 animate-fade-in ring-4 ring-blue-50/50">
+                            <h3 className="font-bold text-slate-800 mb-6 border-b border-slate-100 pb-3 text-lg">
+                                {isAdding ? '새 규정 등록' : '규정 수정'}
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 items-end">
+                                <div className="lg:col-span-2 space-y-2">
+                                    <label className="text-xs font-bold text-slate-500 block uppercase">규정명</label>
+                                    <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-200 outline-none" value={form.type} onChange={e=>setForm({...form, type: e.target.value})} placeholder="예: 승진 축하" />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-xs font-bold text-slate-500 block uppercase">지원금</label>
+                                    <input type="number" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-200 outline-none" value={form.amount} onChange={e=>setForm({...form, amount: parseInt(e.target.value)||0})} />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-xs font-bold text-slate-500 block uppercase">휴가(일)</label>
+                                    <input type="number" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-200 outline-none" value={form.days} onChange={e=>setForm({...form, days: parseInt(e.target.value)||0})} />
+                                </div>
+                                <div className="flex items-center justify-between bg-slate-50 px-4 py-2.5 rounded-lg border border-slate-200 h-[42px]">
+                                    <label className="text-sm text-slate-700 font-medium cursor-pointer" htmlFor="wreath_check">화환 지원</label>
+                                    <input 
+                                        id="wreath_check"
+                                        type="checkbox" 
+                                        className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
+                                        checked={form.wreath} 
+                                        onChange={e=>setForm({...form, wreath: e.target.checked})} 
+                                    />
+                                </div>
+                            </div>
+                            <div className="mt-6 flex justify-end gap-3">
+                                <button onClick={() => { setIsAdding(false); setEditId(null); }} className="px-5 py-2.5 text-sm text-slate-600 hover:bg-slate-100 rounded-lg font-medium transition-colors">취소</button>
+                                <button onClick={handleSave} className="px-6 py-2.5 text-sm bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-lg shadow-blue-200/50 transition-colors">저장완료</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Regulations Table */}
+                    <div className="glass-panel rounded-2xl overflow-hidden">
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-50/80 text-slate-500 text-xs uppercase font-bold tracking-wider">
+                                <tr>
+                                    <th className="px-6 py-4">규정명</th>
+                                    <th className="px-6 py-4">지원금</th>
+                                    <th className="px-6 py-4">휴가</th>
+                                    <th className="px-6 py-4 text-center">화환</th>
+                                    <th className="px-6 py-4 text-right">관리</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 bg-white/60">
+                                {regulations.map(reg => (
+                                    <tr key={reg.id} className="hover:bg-blue-50/30 transition-colors group">
+                                        <td className="px-6 py-4 font-bold text-slate-800">{reg.type}</td>
+                                        <td className="px-6 py-4 font-mono text-slate-600">{formatCurrency(reg.amount)}</td>
+                                        <td className="px-6 py-4">{reg.days}일</td>
+                                        <td className="px-6 py-4 text-center">
+                                            {reg.wreath ? <span className="text-purple-600 text-[10px] uppercase bg-purple-50 px-2 py-1 rounded border border-purple-100 font-bold">지원됨</span> : <span className="text-slate-300">-</span>}
+                                        </td>
+                                        <td className="px-6 py-4 text-right">
+                                            <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <button 
+                                                    onClick={() => startEdit(reg)}
+                                                    className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                                    title="수정"
+                                                >
+                                                    <IconSettings />
+                                                </button>
+                                                <button 
+                                                    onClick={() => handleDelete(reg.id)}
+                                                    className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                                    title="삭제"
+                                                >
+                                                    <IconTrash />
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+
+        const TrashView = ({ deletedEvents, onRestoreEvent, onPermanentDelete }) => {
+            return (
+                <div className="animate-fade-in space-y-6 pb-24 md:pb-0">
+                    <header>
+                        <h2 className="text-3xl font-bold text-slate-800 tracking-tight">휴지통</h2>
+                        <p className="text-sm text-slate-500 mt-1">삭제된 내역은 30일 내 복구 가능합니다.</p>
+                    </header>
+                    <div className="glass-panel rounded-2xl overflow-hidden">
+                        <div className="px-6 py-4 border-b border-slate-100 bg-white/80 text-sm text-slate-500">
+                            총 {deletedEvents.length}건
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-slate-50/80 text-slate-500 text-xs uppercase font-bold tracking-wider">
+                                    <tr>
+                                        <th className="px-6 py-4">삭제일</th>
+                                        <th className="px-6 py-4">사원 정보</th>
+                                        <th className="px-6 py-4">유형</th>
+                                        <th className="px-6 py-4 text-right">금액</th>
+                                        <th className="px-6 py-4 text-right">관리</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 bg-white/60">
+                                    {deletedEvents.length === 0 ? (
+                                        <tr><td colSpan="5" className="text-center py-12 text-slate-400">휴지통이 비어 있습니다.</td></tr>
+                                    ) : (
+                                        deletedEvents.map(event => (
+                                            <tr key={event.id} className="hover:bg-blue-50/50 transition-colors">
+                                                <td className="px-6 py-4 text-xs text-slate-500">{event.deletedAtLocal || '-'}</td>
+                                                <td className="px-6 py-4">
+                                                    <div className="font-bold text-slate-800">{event.empName}</div>
+                                                    <div className="text-xs text-slate-500">{event.deptName || '-'}</div>
+                                                </td>
+                                                <td className="px-6 py-4">{event.type}</td>
+                                                <td className="px-6 py-4 text-right font-bold text-slate-800">{formatCurrency(event.amount || 0)}</td>
+                                                <td className="px-6 py-4 text-right">
+                                                    <div className="flex justify-end gap-2">
+                                                        <button onClick={() => onRestoreEvent(event.id)} className="px-3 py-1.5 text-xs rounded-lg bg-emerald-600 text-white">복구</button>
+                                                        <button onClick={() => onPermanentDelete(event.id)} className="px-3 py-1.5 text-xs rounded-lg bg-red-600 text-white">영구삭제</button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ExecutionView = ({ events, executions, onSaveExecution }) => {
+            const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+            const [statusFilter, setStatusFilter] = useState('all');
+            const [searchTerm, setSearchTerm] = useState('');
+
+            const availableYears = useMemo(() => {
+                const ys = events
+                    .map(e => e.date ? new Date(e.date).getFullYear() : null)
+                    .filter(y => Number.isFinite(y));
+                const set = new Set(ys);
+                set.add(new Date().getFullYear());
+                return Array.from(set).sort((a, b) => b - a);
+            }, [events]);
+
+            useEffect(() => {
+                if (!availableYears.includes(selectedYear)) setSelectedYear(availableYears[0] || new Date().getFullYear());
+            }, [availableYears, selectedYear]);
+
+            const rows = useMemo(() => {
+                const q = searchTerm.trim().toLowerCase();
+                return events
+                    .filter(e => e.date && e.date.startsWith(String(selectedYear)))
+                    .map(e => {
+                        const exec = executions.find(x => Number(x.eventId) === Number(e.id));
+                        return {
+                            ...e,
+                            executed: Boolean(exec?.executed),
+                            executionDate: exec?.executionDate || '',
+                            method: exec?.method || '',
+                            executionMemo: exec?.memo || ''
+                        };
+                    })
+                    .filter(e => {
+                        if (statusFilter === 'done') return e.executed;
+                        if (statusFilter === 'todo') return !e.executed;
+                        return true;
+                    })
+                    .filter(e => {
+                        if (!q) return true;
+                        return (
+                            String(e.empName || '').toLowerCase().includes(q) ||
+                            String(e.deptName || '').toLowerCase().includes(q) ||
+                            String(e.type || '').toLowerCase().includes(q)
+                        );
+                    })
+                    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+            }, [events, executions, selectedYear, statusFilter, searchTerm]);
+
+            const totalAmount = rows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+            const doneCount = rows.filter(r => r.executed).length;
+            const doneAmount = rows.filter(r => r.executed).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+
+            const toggleDone = async (row, checked) => {
+                await onSaveExecution({
+                    eventId: row.id,
+                    executed: checked,
+                    executionDate: checked ? (row.executionDate || new Date().toISOString().slice(0, 10)) : '',
+                    method: row.method || '',
+                    memo: row.executionMemo || ''
+                });
+            };
+
+            return (
+                <div className="animate-fade-in space-y-6 pb-24 md:pb-0">
+                    <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                            <h2 className="text-3xl font-bold text-slate-800 tracking-tight">지급 집행관리</h2>
+                            <p className="text-sm text-slate-500 mt-1">신청과 실제 집행을 분리해 정산 상태를 관리합니다.</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm">
+                                {availableYears.map(y => <option key={y} value={y}>{y}년</option>)}
+                            </select>
+                            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm">
+                                <option value="all">전체</option>
+                                <option value="todo">미집행</option>
+                                <option value="done">집행완료</option>
+                            </select>
+                        </div>
+                    </header>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="glass-panel p-5 rounded-2xl border-l-4 border-slate-500">
+                            <p className="text-xs text-slate-500 font-bold">총 대상 건수</p>
+                            <p className="text-2xl font-black text-slate-800 mt-1">{rows.length}건</p>
+                        </div>
+                        <div className="glass-panel p-5 rounded-2xl border-l-4 border-emerald-500">
+                            <p className="text-xs text-slate-500 font-bold">집행 완료</p>
+                            <p className="text-2xl font-black text-slate-800 mt-1">{doneCount}건 / {formatCurrency(doneAmount)}</p>
+                        </div>
+                        <div className="glass-panel p-5 rounded-2xl border-l-4 border-amber-500">
+                            <p className="text-xs text-slate-500 font-bold">집행 대상 총액</p>
+                            <p className="text-2xl font-black text-slate-800 mt-1">{formatCurrency(totalAmount)}</p>
+                        </div>
+                    </div>
+
+                    <div className="glass-panel rounded-2xl overflow-hidden">
+                        <div className="px-6 py-4 border-b border-slate-100 bg-white/80 flex justify-between gap-3">
+                            <h4 className="font-bold text-slate-800">집행 상태 목록</h4>
+                            <input
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                placeholder="사원/부서/유형 검색"
+                                className="w-64 px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                            />
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-slate-50/80 text-slate-500 text-xs uppercase font-bold tracking-wider">
+                                    <tr>
+                                        <th className="px-6 py-4">발생일</th>
+                                        <th className="px-6 py-4">사원 정보</th>
+                                        <th className="px-6 py-4">유형</th>
+                                        <th className="px-6 py-4 text-right">지원금</th>
+                                        <th className="px-6 py-4">집행일</th>
+                                        <th className="px-6 py-4">수단</th>
+                                        <th className="px-6 py-4 text-right">상태</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 bg-white/60">
+                                    {rows.length === 0 ? (
+                                        <tr><td colSpan="7" className="text-center py-12 text-slate-400">표시할 데이터가 없습니다.</td></tr>
+                                    ) : rows.map(row => (
+                                        <tr key={row.id} className="hover:bg-blue-50/40">
+                                            <td className="px-6 py-4 text-xs font-mono text-slate-600">{row.date}</td>
+                                            <td className="px-6 py-4">
+                                                <div className="font-bold text-slate-800">{row.empName}</div>
+                                                <div className="text-xs text-slate-500">{row.deptName || '-'}</div>
+                                            </td>
+                                            <td className="px-6 py-4">{row.type}</td>
+                                            <td className="px-6 py-4 text-right font-bold">{formatCurrency(row.amount || 0)}</td>
+                                            <td className="px-6 py-4">
+                                                <input
+                                                    type="date"
+                                                    value={row.executionDate || ''}
+                                                    disabled={!row.executed}
+                                                    onChange={(e) => onSaveExecution({ eventId: row.id, executed: true, executionDate: e.target.value, method: row.method || '', memo: row.executionMemo || '' })}
+                                                    className="px-2 py-1.5 rounded border border-slate-200 text-xs disabled:bg-slate-50 disabled:text-slate-300"
+                                                />
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <select
+                                                    value={row.method || ''}
+                                                    disabled={!row.executed}
+                                                    onChange={(e) => onSaveExecution({ eventId: row.id, executed: true, executionDate: row.executionDate || new Date().toISOString().slice(0, 10), method: e.target.value, memo: row.executionMemo || '' })}
+                                                    className="px-2 py-1.5 rounded border border-slate-200 text-xs disabled:bg-slate-50 disabled:text-slate-300"
+                                                >
+                                                    <option value="">선택</option>
+                                                    <option value="계좌이체">계좌이체</option>
+                                                    <option value="법인카드">법인카드</option>
+                                                    <option value="현금">현금</option>
+                                                </select>
+                                            </td>
+                                            <td className="px-6 py-4 text-right">
+                                                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700">
+                                                    <input type="checkbox" checked={row.executed} onChange={(e) => toggleDone(row, e.target.checked)} />
+                                                    {row.executed ? '집행완료' : '미집행'}
+                                                </label>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const AlertsView = ({ events, executions, readAlerts, onToggleRead, onMarkAllRead }) => {
+            const now = new Date();
+            const alerts = useMemo(() => {
+                const rows = [];
+                events.forEach((e) => {
+                    const exec = executions.find(x => Number(x.eventId) === Number(e.id));
+                    const eventDate = e.date ? new Date(e.date) : null;
+                    if (eventDate && !exec?.executed) {
+                        const diffDays = Math.floor((now - eventDate) / (1000 * 60 * 60 * 24));
+                        if (diffDays >= 7) {
+                            rows.push({
+                                id: `overdue_${e.id}`,
+                                level: 'high',
+                                title: '집행 지연',
+                                desc: `${e.empName} (${e.type}) 건이 ${diffDays}일 미집행 상태입니다.`,
+                                date: e.date,
+                                amount: e.amount || 0
+                            });
+                        } else if (diffDays >= 3) {
+                            rows.push({
+                                id: `todo_${e.id}`,
+                                level: 'medium',
+                                title: '집행 대기',
+                                desc: `${e.empName} (${e.type}) 건의 집행 확인이 필요합니다.`,
+                                date: e.date,
+                                amount: e.amount || 0
+                            });
+                        }
+                    }
+                    if (!String(e.memo || '').trim()) {
+                        rows.push({
+                            id: `memo_${e.id}`,
+                            level: 'low',
+                            title: '메모 누락',
+                            desc: `${e.empName} (${e.type}) 건에 메모가 없습니다.`,
+                            date: e.date,
+                            amount: e.amount || 0
+                        });
+                    }
+                });
+                return rows.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+            }, [events, executions, now]);
+
+            const unreadCount = alerts.filter(a => !readAlerts[a.id]).length;
+
+            const levelClass = (level) => {
+                if (level === 'high') return 'bg-red-50 border-red-200 text-red-700';
+                if (level === 'medium') return 'bg-amber-50 border-amber-200 text-amber-700';
+                return 'bg-slate-50 border-slate-200 text-slate-700';
+            };
+
+            return (
+                <div className="animate-fade-in space-y-6 pb-24 md:pb-0">
+                    <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                            <h2 className="text-3xl font-bold text-slate-800 tracking-tight">알림·기한관리</h2>
+                            <p className="text-sm text-slate-500 mt-1">1인 운영 기준으로 우선 처리 건만 빠르게 확인합니다.</p>
+                        </div>
+                        <button onClick={onMarkAllRead} className="px-4 py-2 rounded-xl bg-slate-800 text-white text-sm font-semibold">
+                            알림 일괄 확인 ({unreadCount})
+                        </button>
+                    </header>
+
+                    <div className="glass-panel rounded-2xl p-6">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="p-4 rounded-xl bg-white border border-slate-200">
+                                <p className="text-xs text-slate-500 font-bold">전체 알림</p>
+                                <p className="text-2xl font-black text-slate-800 mt-1">{alerts.length}건</p>
+                            </div>
+                            <div className="p-4 rounded-xl bg-white border border-slate-200">
+                                <p className="text-xs text-slate-500 font-bold">미확인 알림</p>
+                                <p className="text-2xl font-black text-red-600 mt-1">{unreadCount}건</p>
+                            </div>
+                            <div className="p-4 rounded-xl bg-white border border-slate-200">
+                                <p className="text-xs text-slate-500 font-bold">고위험 알림</p>
+                                <p className="text-2xl font-black text-amber-600 mt-1">{alerts.filter(a => a.level === 'high').length}건</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-3">
+                        {alerts.length === 0 ? (
+                            <div className="glass-panel rounded-2xl p-10 text-center text-slate-400">현재 확인할 알림이 없습니다.</div>
+                        ) : alerts.map(alert => (
+                            <div key={alert.id} className={`glass-panel rounded-2xl p-5 border ${levelClass(alert.level)} ${readAlerts[alert.id] ? 'opacity-60' : ''}`}>
+                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                                    <div>
+                                        <div className="text-xs font-bold uppercase tracking-wide">{alert.title}</div>
+                                        <div className="font-semibold mt-1">{alert.desc}</div>
+                                        <div className="text-xs mt-1">발생일 {alert.date || '-'} · {formatCurrency(alert.amount || 0)}</div>
+                                    </div>
+                                    <button
+                                        onClick={() => onToggleRead(alert.id)}
+                                        className="px-3 py-1.5 rounded-lg text-xs font-bold border border-current"
+                                    >
+                                        {readAlerts[alert.id] ? '확인 취소' : '확인 완료'}
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        const ReportCenterView = ({ events, executions }) => {
+            const currentYear = new Date().getFullYear();
+            const [selectedYear, setSelectedYear] = useState(currentYear);
+            const [template, setTemplate] = useState('monthly');
+            const [includeExecution, setIncludeExecution] = useState(true);
+
+            const availableYears = useMemo(() => {
+                const ys = events
+                    .map(e => e.date ? new Date(e.date).getFullYear() : null)
+                    .filter(y => Number.isFinite(y));
+                const set = new Set(ys);
+                set.add(currentYear);
+                return Array.from(set).sort((a, b) => b - a);
+            }, [events, currentYear]);
+
+            useEffect(() => {
+                if (!availableYears.includes(selectedYear)) setSelectedYear(availableYears[0] || currentYear);
+            }, [availableYears, selectedYear, currentYear]);
+
+            const month = new Date().getMonth() + 1;
+            const quarter = Math.ceil(month / 3);
+            const rows = useMemo(() => {
+                let filtered = events.filter(e => e.date && e.date.startsWith(String(selectedYear)));
+                if (template === 'monthly') {
+                    filtered = filtered.filter(e => Number(String(e.date).split('-')[1]) === month);
+                } else if (template === 'quarterly') {
+                    filtered = filtered.filter(e => {
+                        const m = Number(String(e.date).split('-')[1]);
+                        return m >= (quarter - 1) * 3 + 1 && m <= quarter * 3;
+                    });
+                }
+                return filtered
+                    .map(e => {
+                        const exec = executions.find(x => Number(x.eventId) === Number(e.id));
+                        return { ...e, executed: Boolean(exec?.executed), executionDate: exec?.executionDate || '' };
+                    })
+                    .sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+            }, [events, executions, selectedYear, template, month, quarter]);
+
+            const totalAmount = rows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+            const doneAmount = rows.filter(r => r.executed).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+
+            const printLabel = template === 'yearly' ? '연간' : template === 'quarterly' ? `${quarter}분기` : `${month}월`;
+
+            return (
+                <div className="animate-fade-in space-y-6 pb-24 md:pb-0">
+                    <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 no-print">
+                        <div>
+                            <h2 className="text-3xl font-bold text-slate-800 tracking-tight">리포트 센터</h2>
+                            <p className="text-sm text-slate-500 mt-1">대시보드와 분리된 A4 세로형 운영 보고서를 출력합니다.</p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm">
+                                {availableYears.map(y => <option key={y} value={y}>{y}년</option>)}
+                            </select>
+                            <select value={template} onChange={(e) => setTemplate(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm">
+                                <option value="monthly">월간</option>
+                                <option value="quarterly">분기</option>
+                                <option value="yearly">연간</option>
+                            </select>
+                            <label className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm inline-flex items-center gap-2">
+                                <input type="checkbox" checked={includeExecution} onChange={(e) => setIncludeExecution(e.target.checked)} />
+                                집행정보 포함
+                            </label>
+                            <button onClick={() => window.print()} className="px-4 py-2 rounded-xl bg-slate-800 text-white text-sm font-semibold">인쇄 / PDF</button>
+                        </div>
+                    </header>
+
+                    <section className="glass-panel rounded-2xl p-8 bg-white">
+                        <h3 className="text-2xl font-black text-slate-900">{selectedYear}년 경조사 운영 보고서 ({printLabel})</h3>
+                        <p className="text-xs text-slate-500 mt-1">생성시각: {new Date().toLocaleString('ko-KR')}</p>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-6">
+                            <div className="border border-slate-200 rounded-xl p-4 bg-slate-50">
+                                <p className="text-xs text-slate-500 font-bold">대상 건수</p>
+                                <p className="text-2xl font-black text-slate-800 mt-1">{rows.length}건</p>
+                            </div>
+                            <div className="border border-slate-200 rounded-xl p-4 bg-slate-50">
+                                <p className="text-xs text-slate-500 font-bold">총 지원금</p>
+                                <p className="text-2xl font-black text-slate-800 mt-1">{formatCurrency(totalAmount)}</p>
+                            </div>
+                            <div className="border border-slate-200 rounded-xl p-4 bg-slate-50">
+                                <p className="text-xs text-slate-500 font-bold">집행완료 금액</p>
+                                <p className="text-2xl font-black text-slate-800 mt-1">{formatCurrency(doneAmount)}</p>
+                            </div>
+                        </div>
+
+                        <div className="mt-6 overflow-x-auto">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold">
+                                    <tr>
+                                        <th className="px-3 py-2">발생일</th>
+                                        <th className="px-3 py-2">부서</th>
+                                        <th className="px-3 py-2">사원</th>
+                                        <th className="px-3 py-2">유형</th>
+                                        <th className="px-3 py-2 text-right">휴가</th>
+                                        <th className="px-3 py-2 text-right">지원금</th>
+                                        {includeExecution && <th className="px-3 py-2 text-right">집행</th>}
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {rows.length === 0 ? (
+                                        <tr><td colSpan={includeExecution ? 7 : 6} className="px-3 py-8 text-center text-slate-400">보고서 데이터가 없습니다.</td></tr>
+                                    ) : rows.map(row => (
+                                        <tr key={row.id}>
+                                            <td className="px-3 py-2">{row.date}</td>
+                                            <td className="px-3 py-2">{row.deptName || '-'}</td>
+                                            <td className="px-3 py-2">{row.empName}</td>
+                                            <td className="px-3 py-2">{row.type}</td>
+                                            <td className="px-3 py-2 text-right">{row.days || 0}일</td>
+                                            <td className="px-3 py-2 text-right font-semibold">{formatCurrency(row.amount || 0)}</td>
+                                            {includeExecution && <td className="px-3 py-2 text-right">{row.executed ? `완료 (${row.executionDate || '-'})` : '미집행'}</td>}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+            );
+        };
+
+        // --- App Shell ---
+        const App = () => {
+            const [view, setView] = useState('dashboard');
+            const [events, setEvents] = useState([]);
+            const [deletedEvents, setDeletedEvents] = useState([]);
+            const [executions, setExecutions] = useState([]);
+            const [regulations, setRegulations] = useState(DEFAULT_REGULATIONS);
+            const [editingEvent, setEditingEvent] = useState(null);
+            const [cloudReady, setCloudReady] = useState(false);
+            const [cloudError, setCloudError] = useState('');
+            const [lastBackupAt, setLastBackupAt] = useState(() => localStorage.getItem(UI_STORAGE_KEYS.lastBackupAt) || '');
+            const [recentInput, setRecentInput] = useState(null);
+            const [readAlerts, setReadAlerts] = useState(() => safeJsonParse(localStorage.getItem(UI_STORAGE_KEYS.alertReads), {}));
+
+            useEffect(() => {
+                if (!db || !auth) {
+                    setCloudError('Firebase 초기화 실패');
+                    return;
+                }
+
+                let unsubEvents = null;
+                let unsubRegs = null;
+                let unsubDeleted = null;
+                let unsubExecutions = null;
+
+                const attachSnapshots = () => {
+                    if (unsubEvents || unsubRegs) return;
+                    const ownerUid = resolveSessionUid();
+                    if (!ownerUid) {
+                        setCloudError('사용자 세션을 확인하지 못했습니다.');
+                        return;
+                    }
+                    unsubEvents = db.collection('corp_events').where('ownerUid', '==', ownerUid).onSnapshot(
+                        (snap) => {
+                            const rows = snap.docs
+                                .map(d => ({ docKey: d.id, id: Number(d.id), ...d.data() }))
+                                .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+                            setEvents(rows);
+                            if (rows[0]) {
+                                setRecentInput({
+                                    deptName: rows[0].deptName || '',
+                                    empName: rows[0].empName || ''
+                                });
+                            }
+                            setCloudReady(true);
+                        },
+                        (err) => {
+                            console.error('Events snapshot error:', err);
+                            setCloudError('이벤트 데이터 동기화 실패');
+                        }
+                    );
+
+                    unsubRegs = db.collection('corp_regulations').where('ownerUid', '==', ownerUid).onSnapshot(
+                        async (snap) => {
+                            const rows = snap.docs.map(d => ({ docKey: d.id, id: Number(d.id), ...d.data() }));
+                            if (rows.length === 0) {
+                                const batch = db.batch();
+                                DEFAULT_REGULATIONS.forEach((reg) => {
+                                    const ref = db.collection('corp_regulations').doc(buildOwnedDocKey(reg.id));
+                                    batch.set(ref, {
+                                        ...reg,
+                                        ownerUid,
+                                        ownerEmail: resolveSessionEmail(),
+                                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                                    });
+                                });
+                                await batch.commit();
+                            } else {
+                                setRegulations(rows.sort((a, b) => Number(a.id) - Number(b.id)));
+                            }
+                        },
+                        (err) => {
+                            console.error('Regulations snapshot error:', err);
+                            setCloudError('규정 데이터 동기화 실패');
+                        }
+                    );
+
+                    unsubDeleted = db.collection('corp_events_deleted').where('ownerUid', '==', ownerUid).onSnapshot(
+                        (snap) => {
+                            const now = Date.now();
+                            const rows = snap.docs
+                                .map(d => ({ docKey: d.id, id: Number(d.id), ...d.data() }))
+                                .filter(r => {
+                                    if (!r.deletedAtMs) return true;
+                                    return now - Number(r.deletedAtMs) <= 30 * 24 * 60 * 60 * 1000;
+                                })
+                                .sort((a, b) => Number(b.deletedAtMs || 0) - Number(a.deletedAtMs || 0));
+                            setDeletedEvents(rows);
+                        },
+                        (err) => {
+                            console.error('Deleted events snapshot error:', err);
+                        }
+                    );
+
+                    unsubExecutions = db.collection('corp_event_executions').where('ownerUid', '==', ownerUid).onSnapshot(
+                        (snap) => {
+                            const rows = snap.docs
+                                .map(d => ({ docKey: d.id, eventId: Number(d.id), ...d.data() }))
+                                .sort((a, b) => Number(b.eventId || 0) - Number(a.eventId || 0));
+                            setExecutions(rows);
+                        },
+                        (err) => {
+                            console.error('Executions snapshot error:', err);
+                        }
+                    );
+                };
+
+                const unsubAuth = auth.onAuthStateChanged((u) => {
+                    if (u) {
+                        attachSnapshots();
+                        return;
+                    }
+                    window.setTimeout(() => {
+                        if (!auth.currentUser) {
+                            setCloudError(
+                                officeFlowSession?.authenticated
+                                    ? 'OfficeFlow 인증 세션을 아직 확인하지 못했습니다.'
+                                    : '로그인 세션을 확인하지 못했습니다. 다시 로그인 후 시도해주세요.'
+                            );
+                        }
+                    }, officeFlowSession?.authenticated ? 2500 : 1500);
+                });
+
+                return () => {
+                    unsubAuth && unsubAuth();
+                    unsubEvents && unsubEvents();
+                    unsubRegs && unsubRegs();
+                    unsubDeleted && unsubDeleted();
+                    unsubExecutions && unsubExecutions();
+                };
+            }, []);
+
+            useEffect(() => {
+                localStorage.setItem(UI_STORAGE_KEYS.alertReads, JSON.stringify(readAlerts));
+            }, [readAlerts]);
+
+            const handleDeleteEvent = async (id) => {
+                if (!confirm('정말 이 신청 내역을 삭제하시겠습니까?')) return;
+                if (!db) return;
+                const target = events.find(e => Number(e.id) === Number(id));
+                const docKey = target?.docKey || buildOwnedDocKey(id);
+                if (target) {
+                    await db.collection('corp_events_deleted').doc(docKey).set({
+                        ...target,
+                        ownerUid: resolveSessionUid(),
+                        ownerEmail: resolveSessionEmail(),
+                        deletedAtMs: Date.now(),
+                        deletedAtLocal: new Date().toLocaleString('ko-KR'),
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true });
+                }
+                await db.collection('corp_events').doc(docKey).delete();
+                await db.collection('corp_event_executions').doc(docKey).delete().catch(() => {});
+            };
+            const handleEditEvent = (event) => {
+                setEditingEvent(event);
+                setView('register');
+            };
+            const handleSaveEvent = async (eventData) => {
+                if (!db) return;
+                const docKey = eventData.docKey || buildOwnedDocKey(eventData.id);
+                await db.collection('corp_events').doc(docKey).set({
+                    ...eventData,
+                    ownerUid: resolveSessionUid(),
+                    ownerEmail: resolveSessionEmail(),
+                    ownerRole: resolveSessionRole(),
+                    ownerProvider: resolveSessionProvider(),
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+                setRecentInput({ deptName: eventData.deptName || '', empName: eventData.empName || '' });
+                setEditingEvent(null);
+                setView('dashboard');
+            };
+            const handleRestoreEvent = async (id) => {
+                if (!db) return;
+                const target = deletedEvents.find(e => Number(e.id) === Number(id));
+                if (!target) return;
+                const deletedDocKey = target.docKey || buildOwnedDocKey(id);
+                const { deletedAtMs, deletedAtLocal, ...rest } = target;
+                await db.collection('corp_events').doc(buildOwnedDocKey(id)).set({
+                    ...rest,
+                    ownerUid: resolveSessionUid() || rest.ownerUid || '',
+                    ownerEmail: resolveSessionEmail() || rest.ownerEmail || '',
+                    ownerRole: resolveSessionRole() || rest.ownerRole || 'member',
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+                await db.collection('corp_events_deleted').doc(deletedDocKey).delete();
+            };
+            const handlePermanentDelete = async (id) => {
+                if (!db) return;
+                if (!confirm('휴지통에서 영구 삭제하시겠습니까?')) return;
+                const target = deletedEvents.find(e => Number(e.id) === Number(id));
+                await db.collection('corp_events_deleted').doc(target?.docKey || buildOwnedDocKey(id)).delete();
+            };
+            const handleSaveRegulation = async (regulation) => {
+                if (!db) return;
+                const docKey = regulation.docKey || buildOwnedDocKey(regulation.id);
+                await db.collection('corp_regulations').doc(docKey).set({
+                    ...regulation,
+                    ownerUid: resolveSessionUid(),
+                    ownerEmail: resolveSessionEmail(),
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+            };
+            const handleDeleteRegulation = async (id) => {
+                if (!db) return;
+                const target = regulations.find(r => Number(r.id) === Number(id));
+                await db.collection('corp_regulations').doc(target?.docKey || buildOwnedDocKey(id)).delete();
+            };
+            const handleSaveExecution = async (execution) => {
+                if (!db) return;
+                const docKey = execution.docKey || buildOwnedDocKey(execution.eventId);
+                await db.collection('corp_event_executions').doc(docKey).set({
+                    ...execution,
+                    ownerUid: resolveSessionUid(),
+                    ownerEmail: resolveSessionEmail(),
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+            };
+            const handleCancelRegister = (targetView = 'dashboard') => {
+                setEditingEvent(null);
+                setView(targetView);
+            };
+            const handleTabChange = (target) => {
+                if (target === 'register') setEditingEvent(null);
+                setView(target);
+            };
+
+            const handleBackupJson = () => {
+                const payload = {
+                    version: 1,
+                    exportedAt: new Date().toISOString(),
+                    events,
+                    deletedEvents,
+                    executions,
+                    regulations
+                };
+                const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `경조사_백업_${new Date().toISOString().slice(0,10)}.json`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+                const stamp = new Date().toLocaleString('ko-KR');
+                setLastBackupAt(stamp);
+                localStorage.setItem(UI_STORAGE_KEYS.lastBackupAt, stamp);
+            };
+            const handleBackupCsv = () => {
+                const headers = 'id,발생일자,부서명,사원명,유형,지원금,휴가일수,화환,메모\n';
+                const rows = events.map(e =>
+                    `${e.id},${e.date || ''},${e.deptName || ''},${e.empName || ''},${e.type || ''},${Number(e.amount || 0)},${Number(e.days || 0)},${e.wreath ? 'Y' : 'N'},${String(e.memo || '').replace(/,/g, ' ')}`
+                ).join('\n');
+                const blob = new Blob(["\uFEFF" + headers + rows], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `경조사_백업_${new Date().toISOString().slice(0,10)}.csv`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+                const stamp = new Date().toLocaleString('ko-KR');
+                setLastBackupAt(stamp);
+                localStorage.setItem(UI_STORAGE_KEYS.lastBackupAt, stamp);
+            };
+            const handleRestoreJson = async (file) => {
+                if (!db) return;
+                if (!confirm('JSON 백업으로 복원하면 동일 id 데이터가 덮어쓰기 됩니다. 진행할까요?')) return;
+                const text = await file.text();
+                const data = safeJsonParse(text, null);
+                if (!data || !Array.isArray(data.events) || !Array.isArray(data.regulations)) {
+                    alert('복원 파일 형식이 올바르지 않습니다.');
+                    return;
+                }
+                const batch = db.batch();
+                data.events.forEach((e) => {
+                    const ref = db.collection('corp_events').doc(buildOwnedDocKey(e.id));
+                    batch.set(ref, {
+                        ...e,
+                        ownerUid: resolveSessionUid(),
+                        ownerEmail: resolveSessionEmail(),
+                        ownerRole: resolveSessionRole(),
+                        ownerProvider: resolveSessionProvider(),
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true });
+                });
+                (data.deletedEvents || []).forEach((e) => {
+                    const ref = db.collection('corp_events_deleted').doc(buildOwnedDocKey(e.id));
+                    batch.set(ref, {
+                        ...e,
+                        ownerUid: resolveSessionUid(),
+                        ownerEmail: resolveSessionEmail(),
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true });
+                });
+                (data.executions || []).forEach((e) => {
+                    const ref = db.collection('corp_event_executions').doc(buildOwnedDocKey(e.eventId));
+                    batch.set(ref, {
+                        ...e,
+                        ownerUid: resolveSessionUid(),
+                        ownerEmail: resolveSessionEmail(),
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true });
+                });
+                data.regulations.forEach((r) => {
+                    const ref = db.collection('corp_regulations').doc(buildOwnedDocKey(r.id));
+                    batch.set(ref, {
+                        ...r,
+                        ownerUid: resolveSessionUid(),
+                        ownerEmail: resolveSessionEmail(),
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true });
+                });
+                await batch.commit();
+                alert('복원이 완료되었습니다.');
+            };
+            const handleToggleAlertRead = (alertId) => {
+                setReadAlerts(prev => ({ ...prev, [alertId]: !prev[alertId] }));
+            };
+            const handleMarkAllAlertsRead = () => {
+                const map = {};
+                events.forEach((e) => {
+                    map[`overdue_${e.id}`] = true;
+                    map[`todo_${e.id}`] = true;
+                    map[`memo_${e.id}`] = true;
+                });
+                setReadAlerts(prev => ({ ...prev, ...map }));
+            };
+            const Sidebar = ({ activeTab, setActiveTab }) => (
+                <aside className="w-64 bg-slate-900 text-white hidden md:flex flex-col h-screen fixed left-0 top-0 z-20 shadow-2xl no-print">
+                    <div className="p-8">
+                        <h1 className="text-2xl font-black text-white tracking-tighter">
+                            경조사관리<span className="text-blue-500">.Pro</span>
+                        </h1>
+                        <p className="text-slate-500 text-[10px] mt-1 uppercase tracking-widest font-bold">Enterprise Solution</p>
+                    </div>
+                    <nav className="flex-1 px-4 space-y-2">
+                        {[
+                            { id: 'dashboard', label: '대시보드', icon: IconDashboard },
+                            { id: 'register', label: '경조사 등록', icon: IconPlus },
+                            { id: 'history', label: '경조사 이력', icon: IconSearch },
+                            { id: 'execution', label: '지급 집행관리', icon: IconWallet },
+                            { id: 'alerts', label: '알림·기한관리', icon: IconBell },
+                            { id: 'reports', label: '리포트 센터', icon: IconReport },
+                            { id: 'trash', label: '휴지통', icon: IconTrash },
+                            { id: 'settings', label: '규정 설정', icon: IconSettings },
+                        ].map(item => (
+                            <button
+                                key={item.id}
+                                onClick={() => setActiveTab(item.id)}
+                                className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-200 group ${
+                                    activeTab === item.id 
+                                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50 translate-x-1' 
+                                    : 'text-slate-400 hover:bg-slate-800 hover:text-white hover:translate-x-1'
+                                }`}
+                            >
+                                <item.icon />
+                                <span>{item.label}</span>
+                                {activeTab === item.id && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-300"></div>}
+                            </button>
+                        ))}
+                    </nav>
+                    <div className="p-6 border-t border-slate-800">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-500 to-indigo-600 flex items-center justify-center font-bold text-sm shadow-lg">A</div>
+                            <div className="leading-tight">
+                                <div className="text-sm font-bold">관리자</div>
+                                <div className="text-xs text-slate-500">시스템 마스터</div>
+                            </div>
+                        </div>
+                        <div className={`mt-4 flex items-center gap-2 text-[11px] font-semibold px-2.5 py-2 rounded-lg border ${
+                            cloudError ? 'text-red-300 bg-red-900/30 border-red-900/40' : (cloudReady ? 'text-emerald-300 bg-emerald-900/20 border-emerald-900/40' : 'text-amber-300 bg-amber-900/20 border-amber-900/40')
+                        }`}>
+                            <IconCloud />
+                            <span>{cloudError ? '클라우드 오류' : (cloudReady ? '클라우드 연동됨' : '클라우드 연결중')}</span>
+                        </div>
+                    </div>
+                </aside>
+            );
+
+            // Mobile Nav (Bottom)
+            const MobileNav = ({ activeTab, setActiveTab }) => (
+                <div className="md:hidden fixed bottom-0 w-full bg-white/90 backdrop-blur border-t border-slate-200 z-50 flex justify-around p-3 pb-6 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] no-print">
+                    {[
+                        { id: 'dashboard', label: '홈', icon: IconDashboard },
+                        { id: 'register', label: '등록', icon: IconPlus },
+                        { id: 'history', label: '이력', icon: IconSearch },
+                        { id: 'execution', label: '집행', icon: IconWallet },
+                        { id: 'alerts', label: '알림', icon: IconBell },
+                        { id: 'reports', label: '보고서', icon: IconReport },
+                        { id: 'trash', label: '휴지통', icon: IconTrash },
+                        { id: 'settings', label: '설정', icon: IconSettings },
+                    ].map(item => (
+                        <button
+                            key={item.id}
+                            onClick={() => setActiveTab(item.id)}
+                            className={`flex flex-col items-center space-y-1 ${activeTab === item.id ? 'text-blue-600 scale-105' : 'text-slate-400'} transition-transform`}
+                        >
+                            <item.icon />
+                            <span className="text-[10px] font-bold">{item.label}</span>
+                        </button>
+                    ))}
+                </div>
+            );
+
+            if (!cloudReady && !cloudError) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center text-slate-500">
+                        클라우드 데이터 동기화 중...
+                    </div>
+                );
+            }
+
+            return (
+                <div className="flex min-h-screen">
+                    <Sidebar activeTab={view} setActiveTab={handleTabChange} />
+                    <MobileNav activeTab={view} setActiveTab={handleTabChange} />
+                    <main className="flex-1 md:ml-64 p-4 md:p-10 w-full transition-all">
+                        {cloudError && (
+                            <div className="mb-4 px-4 py-3 rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm font-medium">
+                                {cloudError}
+                            </div>
+                        )}
+                        {view === 'dashboard' && <DashboardView events={events} />}
+                        {view === 'register' && <RegisterView regulations={regulations} events={events} eventData={editingEvent} onSave={handleSaveEvent} onCancel={handleCancelRegister} recentInput={recentInput} />}
+                        {view === 'history' && <HistoryView events={events} onEditEvent={handleEditEvent} onDeleteEvent={handleDeleteEvent} />}
+                        {view === 'execution' && <ExecutionView events={events} executions={executions} onSaveExecution={handleSaveExecution} />}
+                        {view === 'alerts' && <AlertsView events={events} executions={executions} readAlerts={readAlerts} onToggleRead={handleToggleAlertRead} onMarkAllRead={handleMarkAllAlertsRead} />}
+                        {view === 'reports' && <ReportCenterView events={events} executions={executions} />}
+                        {view === 'trash' && <TrashView deletedEvents={deletedEvents} onRestoreEvent={handleRestoreEvent} onPermanentDelete={handlePermanentDelete} />}
+                        {view === 'settings' && <SettingsView regulations={regulations} onSaveRegulation={handleSaveRegulation} onDeleteRegulation={handleDeleteRegulation} onBackupJson={handleBackupJson} onBackupCsv={handleBackupCsv} onRestoreJson={handleRestoreJson} lastBackupAt={lastBackupAt} />}
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

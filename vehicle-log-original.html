@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>업무용 승용차 운행기록부 자동 생성기</title>
+    
+    <!-- React & ReactDOM (Development Version for CDN) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel Standalone -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- SheetJS (xlsx) for Excel Export -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- Firebase Compat -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
+        body { font-family: 'Noto Sans KR', sans-serif; background-color: #f3f4f6; }
+        /* Custom Scrollbar for Table */
+        .custom-scrollbar::-webkit-scrollbar { height: 8px; width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script>
+        const OFFICEFLOW_STORAGE_KEY = 'officeflow-one-mvp-state';
+        const officeflowFirebaseConfig = {
+            apiKey: "AIzaSyBfT58Y9XwjalTk0E0NPBWqkVVVOWN9zFQ",
+            authDomain: "officeflow-one.firebaseapp.com",
+            projectId: "officeflow-one",
+            storageBucket: "officeflow-one.firebasestorage.app",
+            messagingSenderId: "1084176732785",
+            appId: "1:1084176732785:web:56e241ddcdb69afdf101d0",
+            measurementId: "G-SYP4NQMGP7"
+        };
+
+        function getOfficeFlowState() {
+            try {
+                if (window.parent && window.parent !== window) {
+                    const raw = window.parent.localStorage.getItem(OFFICEFLOW_STORAGE_KEY);
+                    if (raw) return JSON.parse(raw);
+                }
+            } catch (error) {}
+
+            try {
+                const raw = window.localStorage.getItem(OFFICEFLOW_STORAGE_KEY);
+                if (raw) return JSON.parse(raw);
+            } catch (error) {}
+
+            return null;
+        }
+
+        const officeflowState = getOfficeFlowState();
+        const officeflowSession = officeflowState?.session?.authenticated ? officeflowState.session : null;
+        const officeflowUid = String(officeflowSession?.uid || '').trim();
+        const officeflowEmail = String(officeflowSession?.email || '').toLowerCase();
+        const vehicleUserKey = (officeflowUid || officeflowEmail || 'guest').replace(/[^a-z0-9]+/gi, '_');
+        const vehicleAppId = `ofw-vehicle-log-${vehicleUserKey}`;
+
+        let vehicleFirebase = { app: null, auth: null, db: null };
+        try {
+            vehicleFirebase.app = firebase.apps.length ? firebase.app() : firebase.initializeApp(officeflowFirebaseConfig);
+            vehicleFirebase.auth = firebase.auth();
+            vehicleFirebase.db = firebase.firestore();
+        } catch (error) {
+            console.error('Vehicle app Firebase init failed:', error);
+        }
+
+        function getVehicleStateRef() {
+            if (!vehicleFirebase.db) return null;
+            return vehicleFirebase.db
+                .collection('artifacts')
+                .doc(vehicleAppId)
+                .collection('public')
+                .doc('data')
+                .collection('vehicle_log')
+                .doc('state');
+        }
+
+        function waitForVehicleAuthReady(timeoutMs = 3500) {
+            return new Promise((resolve) => {
+                if (!vehicleFirebase.auth) {
+                    resolve(null);
+                    return;
+                }
+                let settled = false;
+                const timer = setTimeout(() => {
+                    if (settled) return;
+                    settled = true;
+                    unsubscribe && unsubscribe();
+                    resolve(vehicleFirebase.auth.currentUser || null);
+                }, timeoutMs);
+
+                const unsubscribe = vehicleFirebase.auth.onAuthStateChanged((user) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    unsubscribe();
+                    resolve(user || null);
+                });
+            });
+        }
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // --- 유틸리티 함수 ---
+        
+        // 날짜 포맷 (YYYY-MM-DD)
+        const formatDate = (date) => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        // 숫자 포맷팅 (콤마 추가)
+        const formatNum = (n) => n.toLocaleString('ko-KR');
+
+        // 요일 구하기
+        const getDayName = (date) => {
+            const days = ['일', '월', '화', '수', '목', '금', '토'];
+            return days[date.getDay()];
+        };
+
+        // 공휴일/주말 제외하고 근무일 생성 (시작일자 ~ 12월 31일)
+        const generateBusinessDays = (startDateStr, year) => {
+            const days = [];
+            const date = new Date(startDateStr);
+            const endDate = new Date(year, 11, 31);
+
+            // 시작일이 해당 연도의 12월 31일을 넘어가면 빈 배열 반환
+            if (date > endDate) return [];
+
+            while (date <= endDate) {
+                const dayOfWeek = date.getDay();
+                if (dayOfWeek !== 0 && dayOfWeek !== 6) { // 일(0), 토(6) 제외
+                    days.push(new Date(date));
+                }
+                date.setDate(date.getDate() + 1);
+            }
+            return days;
+        };
+
+        // --- 메인 컴포넌트 ---
+        const App = () => {
+            // --- State ---
+            const [config, setConfig] = useState({
+                year: new Date().getFullYear(),
+                startDate: `${new Date().getFullYear()}-01-01`, // 시작 일자 추가
+                dept: '',
+                name: '',
+                startKm: 0,
+                endKm: 0,
+                carType: 'common', // common, exec
+                variance: 30, // 주행거리 변동폭 (%)
+            });
+
+            const [logs, setLogs] = useState([]);
+            const [isGenerated, setIsGenerated] = useState(false);
+            const [error, setError] = useState('');
+            const [cloudLoading, setCloudLoading] = useState(true);
+            const [cloudReady, setCloudReady] = useState(false);
+            const [cloudError, setCloudError] = useState('');
+
+            useEffect(() => {
+                let active = true;
+
+                const bootstrap = async () => {
+                    if (!vehicleFirebase.auth || !getVehicleStateRef()) {
+                        if (active) {
+                            setCloudLoading(false);
+                            setCloudError('클라우드 연결을 초기화하지 못했습니다.');
+                        }
+                        return;
+                    }
+
+                    try {
+                        let authUser = vehicleFirebase.auth.currentUser || await waitForVehicleAuthReady();
+                        if (!authUser) {
+                            throw new Error('auth-not-ready');
+                        }
+                        const snapshot = await getVehicleStateRef().get();
+                        if (!active) return;
+                        if (snapshot.exists) {
+                            const data = snapshot.data() || {};
+                            if (data.config) {
+                                setConfig(prev => ({ ...prev, ...data.config }));
+                            }
+                            if (Array.isArray(data.logs)) {
+                                setLogs(data.logs);
+                            }
+                            setIsGenerated(Boolean(data.isGenerated && Array.isArray(data.logs) && data.logs.length));
+                        }
+                        setCloudReady(true);
+                        setCloudLoading(false);
+                    } catch (loadError) {
+                        console.error('Vehicle log cloud load failed:', loadError);
+                        if (!active) return;
+                        setCloudLoading(false);
+                        setCloudError('클라우드 데이터를 불러오지 못했습니다.');
+                    }
+                };
+
+                bootstrap();
+                return () => {
+                    active = false;
+                };
+            }, []);
+
+            useEffect(() => {
+                if (!cloudReady || !getVehicleStateRef()) return;
+
+                const sync = async () => {
+                    try {
+                        await getVehicleStateRef().set({
+                            config,
+                            logs,
+                            isGenerated,
+                            ownerEmail: officeflowEmail || '',
+                            updatedAt: new Date().toISOString(),
+                        }, { merge: true });
+                    } catch (saveError) {
+                        console.error('Vehicle log cloud save failed:', saveError);
+                        setCloudError('클라우드 저장에 실패했습니다.');
+                    }
+                };
+
+                sync();
+            }, [config, logs, isGenerated, cloudReady]);
+
+            const updateConfig = (updater) => {
+                setConfig(prev => {
+                    const next = typeof updater === 'function' ? updater(prev) : updater;
+                    return next;
+                });
+            };
+
+            // 입력값 변경 핸들러
+            const handleChange = (e) => {
+                const { name, value, type } = e.target;
+                const val = type === 'number' ? parseInt(value, 10) || 0 : value;
+                
+                updateConfig(prev => {
+                    const newConfig = { ...prev, [name]: val };
+                    if (name === 'year') {
+                        newConfig.startDate = `${val}-01-01`;
+                    }
+                    return newConfig;
+                });
+            };
+
+            const setCarType = (carType) => {
+                updateConfig(prev => ({ ...prev, carType }));
+            };
+
+            // 데이터 생성 로직 (핵심 알고리즘)
+            const generateData = () => {
+                setError('');
+                if (config.endKm <= config.startKm) {
+                    setError('최종 주행거리는 시작 주행거리보다 커야 합니다.');
+                    return;
+                }
+                
+                // 날짜 유효성 검사
+                const startYear = new Date(config.startDate).getFullYear();
+                if (startYear !== config.year) {
+                    setError(`시작 일자의 연도(${startYear})가 대상 연도(${config.year})와 다릅니다.`);
+                    return;
+                }
+
+                const businessDays = generateBusinessDays(config.startDate, config.year);
+                const totalDays = businessDays.length;
+
+                if (totalDays === 0) {
+                    setError('생성할 수 있는 근무일이 없습니다. 날짜를 확인해주세요.');
+                    return;
+                }
+
+                const totalDistanceNeeded = config.endKm - config.startKm;
+                
+                // 일평균 거리
+                const avgDist = totalDistanceNeeded / totalDays;
+
+                let currentStartKm = config.startKm;
+                let remainingDist = totalDistanceNeeded;
+                const newLogs = [];
+
+                // 목적지 프리셋
+                // 공용: 기존 다양성 유지
+                const destinationsCommon = [
+                    '거래처(시내)', '지사 방문', '현장 점검', '관공서', '거래처(시외)', 
+                    '협력사 미팅', '은행 업무', '세무서', '우체국', '자재 구매'
+                ];
+                
+                // 임원용: 2개 사업장은 고정 단어 사용, 그 외 항목으로 다양성 보존
+                const destinationsExec = [
+                    '본사 출근', '본사 출근', '본사 출근', '본사 출근', // 비중 높음
+                    '테크캠퍼스 회의', '테크캠퍼스 회의', '테크캠퍼스 회의', // 비중 높음
+                    '외부 접견', '주요 거래처 방문', '관공서 일정' // 기타 다양성
+                ];
+                
+                const getDest = () => {
+                    const list = config.carType === 'common' ? destinationsCommon : destinationsExec;
+                    return list[Math.floor(Math.random() * list.length)];
+                };
+
+                businessDays.forEach((date, index) => {
+                    const isLastDay = index === totalDays - 1;
+                    let todayDist = 0;
+
+                    if (isLastDay) {
+                        // 마지막 날은 남은 거리 모두 할당하여 오차 제거
+                        todayDist = remainingDist;
+                    } else {
+                        // 랜덤 변동성 적용 (평균의 +/- variance%)
+                        const variation = (Math.random() * (config.variance * 2) - config.variance) / 100;
+                        todayDist = Math.round(avgDist * (1 + variation));
+                        
+                        // 최소 거리 5km 보장 및 남은 거리 초과 방지
+                        if (todayDist < 5) todayDist = 5;
+                        if (todayDist >= remainingDist) todayDist = Math.floor(remainingDist / 2);
+                    }
+
+                    const todayStart = currentStartKm;
+                    const todayEnd = currentStartKm + todayDist;
+
+                    newLogs.push({
+                        date: formatDate(date),
+                        day: getDayName(date),
+                        dept: config.dept, 
+                        name: config.name, 
+                        startKm: todayStart,
+                        endKm: todayEnd,
+                        distance: todayDist,
+                        businessDist: todayDist, // 업무용 전체
+                        destination: getDest(),
+                        note: config.carType === 'common' ? '업무 수행' : '경영 지원'
+                    });
+
+                    currentStartKm = todayEnd;
+                    remainingDist -= todayDist;
+                });
+
+                setLogs(newLogs);
+                setIsGenerated(true);
+            };
+
+            // 엑셀 다운로드
+            const downloadExcel = () => {
+                if (logs.length === 0) return;
+
+                // 엑셀용 데이터 매핑
+                // 1. 비고 제외
+                // 2. 숫자에 콤마 추가 (formatNum 함수 사용)
+                const excelData = logs.map(log => ({
+                    '사용일자': `${log.date} (${log.day})`,
+                    '부서': log.dept,
+                    '성명': log.name,
+                    '주행전 계기판(km)': formatNum(log.startKm), // 콤마 적용
+                    '주행후 계기판(km)': formatNum(log.endKm),   // 콤마 적용
+                    '주행거리(km)': formatNum(log.distance),     // 콤마 적용
+                    '업무용 사용거리(km)': formatNum(log.businessDist), // 콤마 적용
+                    '목적지': log.destination
+                    // '비고'는 제외됨
+                }));
+
+                const ws = XLSX.utils.json_to_sheet(excelData);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "운행일지");
+                
+                const fileNameSuffix = config.name ? `_${config.name}` : '';
+                XLSX.writeFile(wb, `업무용승용차_운행기록부_${config.year}${fileNameSuffix}.xlsx`);
+            };
+
+            return (
+                <div className="min-h-screen p-4 md:p-8 max-w-7xl mx-auto">
+                    {/* Header */}
+                    <header className="mb-8 text-center md:text-left flex flex-col md:flex-row justify-between items-center">
+                        <div>
+                            <h1 className="text-3xl font-bold text-gray-800 flex items-center gap-2">
+                                <i className="ph ph-car-profile text-blue-600"></i>
+                                업무용 승용차 운행기록부 생성기
+                            </h1>
+                            <p className="text-gray-500 mt-2 text-sm">
+                                기간을 설정하고 주행거리를 입력하면 운행일지를 자동으로 생성합니다.
+                            </p>
+                        </div>
+                        <div className="mt-4 md:mt-0 text-right">
+                             <div className="text-xs text-gray-400 bg-white px-3 py-1 rounded border">
+                                {cloudLoading ? '클라우드 연결중' : cloudError ? '클라우드 오류' : '클라우드 연동됨'}
+                             </div>
+                        </div>
+                    </header>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        {/* 설정 패널 (좌측) */}
+                        <section className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 h-fit lg:col-span-1">
+                            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2 border-b pb-2">
+                                <i className="ph ph-sliders-horizontal"></i> 기본 설정
+                            </h2>
+
+                            <div className="space-y-4">
+                                {/* 연도 및 시작일자 */}
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">대상 연도</label>
+                                        <input 
+                                            type="number" name="year" 
+                                            value={config.year} onChange={handleChange}
+                                            className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none transition"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-blue-700 mb-1">시작 일자</label>
+                                        <input 
+                                            type="date" name="startDate"
+                                            value={config.startDate} onChange={handleChange}
+                                            className="w-full border border-blue-300 bg-blue-50 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none transition"
+                                        />
+                                    </div>
+                                </div>
+                                <p className="text-xs text-gray-500 -mt-2">
+                                    * 시작 일자부터 12월 31일까지 데이터를 생성합니다.
+                                </p>
+
+                                {/* 사용자 정보 */}
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            부서 <span className="text-gray-400 text-xs font-normal">(선택)</span>
+                                        </label>
+                                        <input 
+                                            type="text" name="dept" placeholder="예: 영업팀"
+                                            value={config.dept} onChange={handleChange}
+                                            className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            성명 <span className="text-gray-400 text-xs font-normal">(선택)</span>
+                                        </label>
+                                        <input 
+                                            type="text" name="name" placeholder="홍길동"
+                                            value={config.name} onChange={handleChange}
+                                            className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none"
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* 차량 타입 */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">차량 용도</label>
+                                    <div className="flex gap-2 p-1 bg-gray-100 rounded-lg">
+                                        <button 
+                                            className={`flex-1 py-2 rounded-md text-sm font-medium transition ${config.carType === 'common' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                                            onClick={() => setCarType('common')}
+                                        >
+                                            공용/영업용
+                                        </button>
+                                        <button 
+                                            className={`flex-1 py-2 rounded-md text-sm font-medium transition ${config.carType === 'exec' ? 'bg-white shadow text-purple-600' : 'text-gray-500 hover:text-gray-700'}`}
+                                            onClick={() => setCarType('exec')}
+                                        >
+                                            임원용
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-gray-400 mt-1">
+                                        {config.carType === 'exec' 
+                                            ? '* 목적지: 본사 출근, 테크캠퍼스 회의 등' 
+                                            : '* 목적지: 거래처, 관공서 등 자동 설정'}
+                                    </p>
+                                </div>
+
+                                {/* 주행 거리 */}
+                                <div className="space-y-3 pt-2 border-t border-dashed">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            시작 계기판 (시작 일자 기준)
+                                        </label>
+                                        <div className="relative">
+                                            <input 
+                                                type="number" name="startKm" 
+                                                value={config.startKm} onChange={handleChange}
+                                                className="w-full border border-gray-300 rounded-lg p-2 pr-8 focus:ring-2 focus:ring-blue-500 outline-none text-right font-mono"
+                                            />
+                                            <span className="absolute right-3 top-2 text-gray-400 text-sm">km</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            연말 계기판 (12월 31일 기준)
+                                        </label>
+                                        <div className="relative">
+                                            <input 
+                                                type="number" name="endKm" 
+                                                value={config.endKm} onChange={handleChange}
+                                                className="w-full border border-gray-300 rounded-lg p-2 pr-8 focus:ring-2 focus:ring-blue-500 outline-none text-right font-mono"
+                                            />
+                                            <span className="absolute right-3 top-2 text-gray-400 text-sm">km</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* 요약 정보 */}
+                                <div className="bg-blue-50 p-3 rounded-lg text-sm text-blue-800 flex justify-between items-center">
+                                    <span>기간 총 주행거리</span>
+                                    <span className="font-bold text-lg">
+                                        {formatNum(config.endKm - config.startKm)} km
+                                    </span>
+                                </div>
+
+                                {/* 에러 메시지 */}
+                                {error && (
+                                    <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm flex items-center gap-2">
+                                        <i className="ph ph-warning-circle"></i> {error}
+                                    </div>
+                                )}
+
+                                {cloudError && (
+                                    <div className="bg-amber-50 text-amber-700 p-3 rounded-lg text-sm flex items-center gap-2">
+                                        <i className="ph ph-cloud-warning"></i> {cloudError}
+                                    </div>
+                                )}
+
+                                <button 
+                                    onClick={generateData}
+                                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition shadow-md active:transform active:scale-95 flex justify-center items-center gap-2"
+                                >
+                                    <i className="ph ph-magic-wand"></i> 데이터 자동 생성
+                                </button>
+                            </div>
+                        </section>
+
+                        {/* 결과 패널 (우측) */}
+                        <section className="bg-white rounded-xl shadow-sm border border-gray-200 lg:col-span-2 flex flex-col h-[600px] lg:h-auto">
+                            <div className="p-4 border-b flex justify-between items-center bg-gray-50 rounded-t-xl">
+                                <h2 className="font-semibold text-gray-700 flex items-center gap-2">
+                                    <i className="ph ph-table"></i> 생성 결과 미리보기
+                                    {isGenerated && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">{logs.length}일 생성됨</span>}
+                                </h2>
+                                {isGenerated && (
+                                    <button 
+                                        onClick={downloadExcel}
+                                        className="bg-green-600 hover:bg-green-700 text-white text-sm px-4 py-2 rounded-lg shadow transition flex items-center gap-2"
+                                    >
+                                        <i className="ph ph-microsoft-excel-logo"></i> 엑셀 다운로드
+                                    </button>
+                                )}
+                            </div>
+
+                            <div className="flex-1 overflow-auto custom-scrollbar p-0 relative">
+                                {!isGenerated ? (
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
+                                        <i className="ph ph-files text-6xl mb-4 opacity-20"></i>
+                                        <p>좌측 정보를 입력하고 [데이터 자동 생성]을 눌러주세요.</p>
+                                    </div>
+                                ) : (
+                                    <table className="w-full text-sm text-left border-collapse">
+                                        <thead className="bg-gray-100 text-gray-600 sticky top-0 z-10 shadow-sm">
+                                            <tr>
+                                                <th className="p-3 font-medium border-b text-center w-24">일자</th>
+                                                <th className="p-3 font-medium border-b text-center w-20">부서</th>
+                                                <th className="p-3 font-medium border-b text-center w-20">성명</th>
+                                                <th className="p-3 font-medium border-b text-right">주행전</th>
+                                                <th className="p-3 font-medium border-b text-right">주행후</th>
+                                                <th className="p-3 font-medium border-b text-right bg-blue-50 text-blue-900">주행거리</th>
+                                                <th className="p-3 font-medium border-b">목적지</th>
+                                                <th className="p-3 font-medium border-b w-24">비고</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {logs.map((log, idx) => (
+                                                <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                                                    <td className="p-3 text-center text-gray-500">
+                                                        {log.date} 
+                                                        <span className={`ml-1 text-xs ${log.day === '토' ? 'text-blue-500' : log.day === '일' ? 'text-red-500' : 'text-gray-400'}`}>
+                                                            ({log.day})
+                                                        </span>
+                                                    </td>
+                                                    <td className="p-3 text-center text-gray-500">{log.dept || '-'}</td>
+                                                    <td className="p-3 text-center text-gray-500">{log.name || '-'}</td>
+                                                    <td className="p-3 text-right font-mono text-gray-600">{formatNum(log.startKm)}</td>
+                                                    <td className="p-3 text-right font-mono text-gray-600">{formatNum(log.endKm)}</td>
+                                                    <td className="p-3 text-right font-mono font-bold text-blue-600 bg-blue-50/30">{formatNum(log.distance)}</td>
+                                                    <td className="p-3 text-gray-700">{log.destination}</td>
+                                                    <td className="p-3 text-gray-500 text-xs">{log.note}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                        {/* 합계 Footer */}
+                                        <tfoot className="bg-gray-100 sticky bottom-0 font-bold text-gray-800">
+                                            <tr>
+                                                <td colSpan="3" className="p-3 text-center">합계</td>
+                                                <td className="p-3 text-right font-mono">{formatNum(config.startKm)}</td>
+                                                <td className="p-3 text-right font-mono">{formatNum(config.endKm)}</td>
+                                                <td className="p-3 text-right font-mono text-blue-700">{formatNum(config.endKm - config.startKm)}</td>
+                                                <td colSpan="2"></td>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                )}
+                            </div>
+                        </section>
+                    </div>
+
+                    <footer className="mt-8 text-center text-xs text-gray-400">
+                        <p>© 2025 Vehicle Log Generator. Designed for Productivity.</p>
+                        <p className="mt-1">※ 본 프로그램은 데이터 작성을 보조하는 도구입니다. 최종 제출 전 반드시 데이터를 검토하시기 바랍니다.</p>
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

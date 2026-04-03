@@ -1,0 +1,1265 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#3b82f6">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Smart Work Calendar</title>
+
+    <!-- 1. Fonts & Icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- PWA Manifest Placeholder (Will be filled by JS) -->
+    <link rel="manifest" id="my-manifest-placeholder">
+
+    <!-- 2. Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Noto Sans KR', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#eff6ff',
+                            100: '#dbeafe',
+                            500: '#3b82f6',
+                            600: '#2563eb',
+                            700: '#1d4ed8',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- 3. React & ReactDOM & Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+
+    <!-- PWA Setup Script -->
+    <script>
+        // Create manifest dynamically to allow "Install App" feature
+        const manifest = {
+            "name": "Smart Work Calendar",
+            "short_name": "SmartWork",
+            "start_url": ".",
+            "display": "standalone",
+            "background_color": "#f1f5f9",
+            "theme_color": "#3b82f6",
+            "icons": [
+                {
+                    "src": "https://cdn-icons-png.flaticon.com/512/2693/2693507.png",
+                    "sizes": "192x192",
+                    "type": "image/png"
+                },
+                {
+                    "src": "https://cdn-icons-png.flaticon.com/512/2693/2693507.png",
+                    "sizes": "512x512",
+                    "type": "image/png"
+                }
+            ]
+        };
+        const stringManifest = JSON.stringify(manifest);
+        const blob = new Blob([stringManifest], {type: 'application/json'});
+        const manifestURL = URL.createObjectURL(blob);
+        document.querySelector('#my-manifest-placeholder').setAttribute('href', manifestURL);
+    </script>
+
+    <style>
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans h-screen overflow-hidden">
+
+    <div id="root"></div>
+
+    <!-- 4. Firebase SDK (Modular - CDN Version) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, Timestamp, setDoc, writeBatch } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
+        import { getAuth, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-auth.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-analytics.js";
+
+        // --- Firebase Configuration Strategy ---
+        let firebaseConfig;
+        if (typeof __firebase_config !== 'undefined') {
+            try {
+                firebaseConfig = JSON.parse(__firebase_config);
+                console.log("[Config] Loaded environment config");
+            } catch (e) {
+                console.warn("[Config] Failed to parse environment config, using fallback.");
+            }
+        }
+
+        if (!firebaseConfig) {
+            firebaseConfig = {
+                apiKey: "AIzaSyBfT58Y9XwjalTk0E0NPBWqkVVVOWN9zFQ",
+                authDomain: "officeflow-one.firebaseapp.com",
+                projectId: "officeflow-one",
+                storageBucket: "officeflow-one.firebasestorage.app",
+                messagingSenderId: "1084176732785",
+                appId: "1:1084176732785:web:56e241ddcdb69afdf101d0",
+                measurementId: "G-SYP4NQMGP7"
+            };
+            console.log("[Config] Loaded OfficeFlow config");
+        }
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        try { getAnalytics(app); } catch (e) { console.warn("[Analytics] init skipped:", e?.message || e); }
+
+        // --- Critical Path & Auth Logic ---
+        
+        const readOfficeFlowSession = () => {
+            try {
+                const raw =
+                    window.parent && window.parent !== window
+                        ? window.parent.localStorage.getItem('officeflow-one-mvp-state')
+                        : localStorage.getItem('officeflow-one-mvp-state');
+                return raw ? JSON.parse(raw) : null;
+            } catch (error) {
+                console.warn("[OfficeFlow] Session read failed:", error);
+                return null;
+            }
+        };
+
+        const officeFlowSession = readOfficeFlowSession();
+        const officeFlowUid = String(officeFlowSession?.session?.uid || '').trim();
+        const officeFlowEmail = String(officeFlowSession?.session?.email || '').toLowerCase().trim();
+        window.OFFICEFLOW_SESSION = officeFlowSession;
+
+        let currentAppId = 'ofw-smartwork-calendar-guest';
+        const officeFlowKey = (officeFlowUid || officeFlowEmail).replace(/[^a-z0-9]/gi, "_");
+        if (officeFlowKey) {
+            currentAppId = `ofw-smartwork-calendar-${officeFlowKey}`;
+            console.log("[App ID] Using OfficeFlow session appId:", currentAppId);
+        } else if (typeof __app_id !== 'undefined' && __app_id) {
+            currentAppId = __app_id;
+            console.log("[App ID] Using environment __app_id:", currentAppId);
+        } else if (firebaseConfig.appId) {
+            currentAppId = firebaseConfig.appId;
+            console.log("[App ID] Using config appId:", currentAppId);
+        }
+        window.CURRENT_APP_ID = currentAppId;
+
+        window.currentAuthState = "initializing"; 
+        
+        const waitForExistingSession = (timeoutMs = 1800) =>
+            new Promise((resolve) => {
+                if (auth.currentUser) {
+                    resolve(true);
+                    return;
+                }
+                let settled = false;
+                const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+                    if (!settled && currentUser) {
+                        settled = true;
+                        unsubscribe();
+                        resolve(true);
+                    }
+                });
+                setTimeout(() => {
+                    if (!settled) {
+                        settled = true;
+                        unsubscribe();
+                        resolve(false);
+                    }
+                }, timeoutMs);
+            });
+
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                    console.log("[Auth] Signed in with custom token");
+                    window.currentAuthState = "custom_token";
+                    return;
+                }
+
+                if (officeFlowEmail) {
+                    window.currentAuthState = "officeflow_session";
+                    if (await waitForExistingSession()) {
+                        console.log("[Auth] Reused existing OfficeFlow session");
+                        return;
+                    }
+                }
+
+                console.warn("[Auth] OfficeFlow session was not restored in time.");
+                window.currentAuthState = "error";
+            } catch (error) {
+                console.error("[Auth] All auth methods failed:", error);
+                window.currentAuthState = "error";
+            }
+        };
+        initAuth();
+
+        // Expose to Window for React
+        window.db = db;
+        window.auth = auth; 
+        window.onAuthStateChanged = onAuthStateChanged; 
+        window.collection = collection;
+        window.addDoc = addDoc;
+        window.updateDoc = updateDoc;
+        window.deleteDoc = deleteDoc;
+        window.doc = doc;
+        window.setDoc = setDoc;
+        window.writeBatch = writeBatch;
+        window.onSnapshot = onSnapshot;
+        window.query = query;
+        window.orderBy = orderBy;
+        window.Timestamp = Timestamp;
+    </script>
+
+    <!-- 5. Application Logic (React) -->
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- Default Holidays Data ---
+        const DEFAULT_HOLIDAYS = {
+            "2024-01-01": "신정", "2024-02-09": "설날 연휴", "2024-02-10": "설날", "2024-02-11": "설날 연휴", "2024-02-12": "대체공휴일",
+            "2024-03-01": "3.1절", "2024-05-05": "어린이날", "2024-05-15": "부처님오신날", "2024-06-06": "현충일",
+            "2024-08-15": "광복절", "2024-09-16": "추석 연휴", "2024-09-17": "추석", "2024-09-18": "추석 연휴",
+            "2024-10-03": "개천절", "2024-10-09": "한글날", "2024-12-25": "크리스마스",
+            "2025-01-01": "신정", "2025-01-28": "설날 연휴", "2025-01-29": "설날", "2025-01-30": "설날 연휴", "2025-03-01": "3.1절",
+            "2025-05-05": "어린이날/부처님오신날", "2025-05-06": "대체공휴일", "2025-06-06": "현충일", "2025-08-15": "광복절",
+            "2025-10-03": "개천절", "2025-10-05": "추석 연휴", "2025-10-06": "추석", "2025-10-07": "추석 연휴", "2025-10-08": "대체공휴일",
+            "2025-10-09": "한글날", "2025-12-25": "크리스마스",
+            "2026-01-01": "신정", "2026-02-16": "설날 연휴", "2026-02-17": "설날", "2026-02-18": "설날 연휴",
+            "2026-03-01": "3.1절", "2026-03-02": "대체공휴일", "2026-05-05": "어린이날", "2026-05-24": "부처님오신날", "2026-05-25": "대체공휴일",
+            "2026-06-06": "현충일", "2026-08-15": "광복절", "2026-09-24": "추석 연휴", "2026-09-25": "추석", "2026-09-26": "추석 연휴",
+            "2026-10-03": "개천절", "2026-10-09": "한글날", "2026-12-25": "크리스마스",
+            "2027-01-01": "신정", "2027-02-06": "설날 연휴", "2027-02-07": "설날", "2027-02-08": "설날 연휴", "2027-02-09": "대체공휴일",
+            "2027-03-01": "3.1절", "2027-05-05": "어린이날", "2027-05-13": "부처님오신날", "2027-06-06": "현충일",
+            "2027-08-15": "광복절", "2027-08-16": "대체공휴일", "2027-09-14": "추석 연휴", "2027-09-15": "추석", "2027-09-16": "추석 연휴",
+            "2027-10-03": "개천절", "2027-10-04": "대체공휴일", "2027-10-09": "한글날", "2027-10-11": "대체공휴일",
+            "2027-12-25": "크리스마스",
+            "2028-01-01": "신정", "2028-01-26": "설날 연휴", "2028-01-27": "설날", "2028-01-28": "설날 연휴",
+            "2028-03-01": "3.1절", "2028-05-02": "부처님오신날", "2028-05-05": "어린이날", "2028-06-06": "현충일",
+            "2028-08-15": "광복절", "2028-10-02": "추석 연휴", "2028-10-03": "추석/개천절", "2028-10-04": "추석 연휴", "2028-10-05": "대체공휴일",
+            "2028-10-09": "한글날", "2028-12-25": "크리스마스"
+        };
+
+        // --- Helpers ---
+        const getDDay = (dateStr) => {
+            if (!dateStr) return '';
+            const today = new Date();
+            today.setHours(0,0,0,0);
+            const target = new Date(dateStr);
+            target.setHours(0,0,0,0);
+            const diff = target - today;
+            const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
+            if (days === 0) return 'D-Day';
+            if (days < 0) return `D+${Math.abs(days)}`;
+            return `D-${days}`;
+        };
+
+        const getPriorityStyle = (priority, type = 'card', taskType = 'task') => {
+            const isCard = type === 'card';
+            
+            if (taskType === 'leave') {
+                return isCard 
+                    ? 'bg-pink-50 border-pink-200 text-pink-900 hover:border-pink-300' 
+                    : 'bg-pink-100 text-pink-700';
+            }
+
+            switch(priority) {
+                case 'high': 
+                    return isCard 
+                        ? 'bg-rose-50 border-rose-200 text-rose-900 hover:border-rose-300' 
+                        : 'bg-rose-100 text-rose-700';
+                case 'medium': 
+                    return isCard 
+                        ? 'bg-amber-50 border-amber-200 text-amber-900 hover:border-amber-300' 
+                        : 'bg-amber-100 text-amber-700';
+                case 'low': 
+                    return isCard 
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-900 hover:border-emerald-300' 
+                        : 'bg-emerald-100 text-emerald-700';
+                default: 
+                    return isCard 
+                        ? 'bg-white border-slate-200 text-slate-800 hover:border-brand-500' 
+                        : 'bg-slate-100 text-slate-600';
+            }
+        };
+
+        const getOfficialHolidayRowsByYear = (year) => (
+            Object.entries(DEFAULT_HOLIDAYS)
+                .filter(([date]) => date.startsWith(`${year}-`))
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .map(([date, name]) => ({ date, name }))
+        );
+
+        // --- Components ---
+        const Modal = ({ isOpen, onClose, title, children }) => {
+            if (!isOpen) return null;
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden transform transition-all scale-100">
+                        <div className="flex justify-between items-center p-5 border-b border-gray-100 bg-gray-50">
+                            <h3 className="font-bold text-lg text-gray-800">{title}</h3>
+                            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition"><i className="fa-solid fa-xmark text-xl"></i></button>
+                        </div>
+                        <div className="p-6 max-h-[80vh] overflow-y-auto">{children}</div>
+                    </div>
+                </div>
+            );
+        };
+
+        const DashboardStats = ({ tasks, holidays }) => {
+            const total = tasks.length;
+            const workTasks = tasks.filter(t => t.type !== 'leave');
+            const avgProgress = workTasks.length === 0 ? 0 : Math.round(workTasks.reduce((acc, curr) => acc + (parseInt(curr.progress)||0), 0) / workTasks.length);
+            
+            const upcomingAlerts = tasks.filter(t => {
+                const hasReminder = t.reminder === true;
+                const isMeeting = t.type === 'meeting';
+                if (!hasReminder && !isMeeting) return false;
+                const today = new Date();
+                today.setHours(0,0,0,0);
+                const taskDate = new Date(t.date);
+                return taskDate >= today;
+            }).sort((a,b) => new Date(a.date) - new Date(b.date)).slice(0, 4);
+
+            return (
+                <div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                            <div className="flex items-center justify-between">
+                                <div><p className="text-xs font-semibold text-slate-500 uppercase">전체 일정</p><h3 className="text-2xl font-bold text-slate-800 mt-1">{total}건</h3></div>
+                                <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600"><i className="fa-solid fa-calendar-check"></i></div>
+                            </div>
+                        </div>
+                        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                            <div className="flex items-center justify-between">
+                                <div><p className="text-xs font-semibold text-slate-500 uppercase">업무 진행률</p><h3 className="text-2xl font-bold text-slate-800 mt-1">{avgProgress}%</h3></div>
+                                <div className="w-10 h-10 rounded-full bg-green-50 flex items-center justify-center text-green-600"><i className="fa-solid fa-chart-pie"></i></div>
+                            </div>
+                            <div className="w-full bg-slate-100 rounded-full h-1.5 mt-3"><div className="bg-green-500 h-1.5 rounded-full" style={{width: `${avgProgress}%`}}></div></div>
+                        </div>
+                        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                            <div className="flex items-center justify-between">
+                                <div><p className="text-xs font-semibold text-slate-500 uppercase">다가오는 알림</p><h3 className="text-2xl font-bold text-slate-800 mt-1">{upcomingAlerts.length}건</h3></div>
+                                <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600"><i className="fa-solid fa-bell"></i></div>
+                            </div>
+                            <p className="text-sm text-slate-500 mt-3">예약 알림과 예정된 미팅·업무를 빠르게 확인합니다.</p>
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mb-6">
+                        <div className="p-4 border-b border-slate-100 bg-indigo-50 flex justify-between items-center">
+                            <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                                <i className="fa-solid fa-bell text-indigo-600"></i> 다가오는 예약 및 알림
+                            </h3>
+                        </div>
+                        {upcomingAlerts.length > 0 ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 p-4">
+                                {upcomingAlerts.map(task => (
+                                    <div key={task.id} className={`border rounded-lg p-3 shadow-sm hover:shadow-md transition ${getPriorityStyle(task.priority, 'card', task.type)}`}>
+                                        <div className="flex justify-between items-start mb-2">
+                                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${task.type==='meeting' ? 'bg-purple-100 text-purple-700' : task.type==='leave' ? 'bg-pink-100 text-pink-700' : 'bg-slate-200 text-slate-600'}`}>
+                                                {task.type==='meeting'?'미팅': task.type==='leave' ? '휴가' : '할일'}
+                                            </span>
+                                            {task.reminder && <i className="fa-solid fa-clock text-indigo-400"></i>}
+                                        </div>
+                                        <div className="font-bold text-sm truncate mb-1">{task.title}</div>
+                                        <div className="text-xs opacity-70 flex items-center gap-1">
+                                            <i className="fa-regular fa-calendar"></i> {task.date} ({getDDay(task.dueDate || task.date)})
+                                        </div>
+                                        {task.reminderTime && (
+                                            <div className="text-xs text-indigo-600 mt-1 font-medium">
+                                                <i className="fa-solid fa-stopwatch mr-1"></i>{task.reminderTime}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="p-8 text-center text-slate-400 text-sm">
+                                예정된 예약이나 알림이 없습니다.
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const SettingsView = ({
+            holidays,
+            holidayItems,
+            onSyncHolidays,
+            isSyncing,
+            onAddHoliday,
+            syncYear,
+            setSyncYear,
+            syncMode,
+            setSyncMode,
+            syncMeta,
+            holidayYearOptions
+        }) => {
+            const [newHoliday, setNewHoliday] = useState({ date: '', name: '' });
+
+            const handleAdd = () => {
+                if(!newHoliday.date || !newHoliday.name) return alert("날짜와 이름을 모두 입력해주세요.");
+                onAddHoliday(newHoliday.date, newHoliday.name);
+                setNewHoliday({ date: '', name: '' });
+            };
+
+            return (
+                <div className="max-w-4xl mx-auto space-y-6">
+                    <h1 className="text-2xl font-bold text-slate-800">설정 (Settings)</h1>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="p-5 border-b border-slate-100">
+                                <h3 className="font-bold text-lg text-slate-800">기본 공휴일 클라우드 동기화</h3>
+                                <p className="text-sm text-slate-500">앱에 내장된 연도별 공휴일 데이터를 선택한 연도로 클라우드에 반영합니다.</p>
+                            </div>
+                            <div className="p-6 space-y-4">
+                                <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-800 leading-6">
+                                    공개 배포 보안을 위해 브라우저에서 외부 공휴일 API를 직접 호출하지 않습니다. 기본 공휴일 데이터와 회사 휴무일을 클라우드에 동기화하는 방식으로 운영됩니다.
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">동기화 연도</label>
+                                        <select
+                                            value={syncYear}
+                                            onChange={e => setSyncYear(Number(e.target.value))}
+                                            className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none bg-white"
+                                        >
+                                            {holidayYearOptions.map(year => (
+                                                <option key={year} value={year}>{year}년</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">동기화 방식</label>
+                                        <select
+                                            value={syncMode}
+                                            onChange={e => setSyncMode(e.target.value)}
+                                        className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none bg-white"
+                                    >
+                                        <option value="merge">누락분 추가(병합)</option>
+                                        <option value="overwrite">기본 공휴일 다시 반영</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                                <div className="font-semibold text-slate-700 mb-1">최근 동기화</div>
+                                {syncMeta?.lastSyncedAt ? (
+                                        <div className="space-y-1 text-xs">
+                                            <div>{syncMeta.lastSyncedYear}년 · {syncMeta.lastSyncMode === 'overwrite' ? '기본 공휴일 다시 반영' : '누락분 추가'}</div>
+                                            <div>{syncMeta.lastSyncedAt}</div>
+                                            {syncMeta.lastSyncSource && <div>소스: {syncMeta.lastSyncSource}</div>}
+                                        </div>
+                                    ) : (
+                                        <div className="text-xs text-slate-500">아직 동기화 이력이 없습니다.</div>
+                                    )}
+                                </div>
+                                <button onClick={onSyncHolidays} disabled={isSyncing} className={`w-full px-4 py-2.5 rounded-lg text-sm font-bold text-white transition flex items-center justify-center gap-2 ${isSyncing ? 'bg-slate-400 cursor-not-allowed' : 'bg-brand-600 hover:bg-brand-700'}`}>
+                                    {isSyncing ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-rotate"></i>} {isSyncing ? '동기화 중...' : '동기화 실행'}
+                                </button>
+                            </div>
+                        </div>
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="p-5 border-b border-slate-100">
+                                <h3 className="font-bold text-lg text-slate-800">공휴일 직접 추가</h3>
+                                <p className="text-sm text-slate-500">원하는 날짜를 공휴일로 등록합니다.</p>
+                            </div>
+                            <div className="p-6 space-y-3">
+                                <input type="date" value={newHoliday.date} onChange={e => setNewHoliday({...newHoliday, date: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2 text-sm outline-none" />
+                                <input type="text" placeholder="공휴일 이름 (예: 창립기념일)" value={newHoliday.name} onChange={e => setNewHoliday({...newHoliday, name: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2 text-sm outline-none" />
+                                <button onClick={handleAdd} className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-bold transition"><i className="fa-solid fa-plus mr-1"></i> 추가하기</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-6">
+                        <div className="p-5 border-b border-slate-100 bg-gray-50">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <h3 className="font-bold text-slate-800">저장된 공휴일 목록 ({Object.keys(holidays).length}건)</h3>
+                                <div className="flex gap-2 text-xs font-semibold">
+                                    <span className="px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">공식 {holidayItems.filter(item => item.source !== 'custom').length}건</span>
+                                    <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700">회사 추가 {holidayItems.filter(item => item.source === 'custom').length}건</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="p-6 bg-slate-50">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 max-h-[300px] overflow-y-auto pr-2">
+                                {holidayItems.sort((a, b) => a.date.localeCompare(b.date)).map((item) => (
+                                    <div key={item.date} className="text-xs bg-white p-2.5 rounded border border-slate-200 shadow-sm">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="font-mono text-slate-600">{item.date}</span>
+                                            <span className={`px-1.5 py-0.5 rounded-full font-semibold ${item.source === 'custom' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>
+                                                {item.source === 'custom' ? '회사' : '공식'}
+                                            </span>
+                                        </div>
+                                        <div className="font-bold text-red-500 truncate mt-1">{item.name}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [tasks, setTasks] = useState([]);
+            const [holidays, setHolidays] = useState(DEFAULT_HOLIDAYS);
+            const [view, setView] = useState('week'); 
+            const [currentDate, setCurrentDate] = useState(new Date());
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [editingTask, setEditingTask] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [errorMsg, setErrorMsg] = useState(null); 
+            const [isHolidaySyncing, setIsHolidaySyncing] = useState(false);
+            const [holidayItems, setHolidayItems] = useState(
+                Object.entries(DEFAULT_HOLIDAYS).map(([date, name]) => ({ date, name, source: 'official' }))
+            );
+            const [holidaySyncYear, setHolidaySyncYear] = useState(new Date().getFullYear());
+            const [holidaySyncMode, setHolidaySyncMode] = useState('merge');
+            const [holidaySyncMeta, setHolidaySyncMeta] = useState(null);
+            const [filterType, setFilterType] = useState('all'); 
+            const [listSearch, setListSearch] = useState('');
+            const [listTypeFilter, setListTypeFilter] = useState('all');
+            const [listStatusFilter, setListStatusFilter] = useState('all');
+            const fileInputRef = useRef(null);
+            
+            const [formData, setFormData] = useState({
+                title: '', type: 'task', leaveType: 'annual', date: '', dueDate: '', priority: 'medium', importance: 'normal', progress: 0, description: '',
+                reminder: false, reminderTime: ''
+            });
+            const holidayYearOptions = useMemo(
+                () => Array.from(new Set(Object.keys(DEFAULT_HOLIDAYS).map(date => Number(date.slice(0, 4))))).sort((a, b) => a - b),
+                []
+            );
+
+            // ... (Auth & Data Fetching effects remain same) ...
+            useEffect(() => {
+                if (!window.onAuthStateChanged || !window.auth) return;
+                const unsubscribe = window.onAuthStateChanged(window.auth, (currentUser) => setUser(currentUser));
+                return () => unsubscribe();
+            }, []);
+
+            useEffect(() => {
+                if (!window.db) return;
+                if (!user) {
+                    const timer = setTimeout(() => {
+                        if (loading) setErrorMsg("로그인 세션을 확인하지 못했습니다. 다시 로그인 후 시도해주세요.");
+                    }, 5000);
+                    return () => clearTimeout(timer);
+                }
+                setErrorMsg(null); 
+                const appId = window.CURRENT_APP_ID;
+                const tasksCollection = window.collection(window.db, 'artifacts', appId, 'public', 'data', 'tasks');
+                const q = window.query(tasksCollection);
+                const unsubTasks = window.onSnapshot(q, (snapshot) => {
+                    const tasksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setTasks(tasksData);
+                    setLoading(false);
+                }, (error) => { setLoading(false); setErrorMsg(`데이터 로드 실패: ${error.code}`); });
+
+                const holidaysCollection = window.collection(window.db, 'artifacts', appId, 'public', 'data', 'holidays');
+                const unsubHolidays = window.onSnapshot(holidaysCollection, (snapshot) => {
+                    const loadedHolidays = {};
+                    const items = [];
+                    snapshot.docs.forEach(doc => {
+                        const data = doc.data();
+                        loadedHolidays[doc.id] = data.name;
+                        items.push({ date: doc.id, name: data.name, source: data.source || 'official' });
+                    });
+                    if (Object.keys(loadedHolidays).length > 0) {
+                        setHolidays(loadedHolidays);
+                        setHolidayItems(items);
+                    } else {
+                        setHolidays(DEFAULT_HOLIDAYS);
+                        setHolidayItems(Object.entries(DEFAULT_HOLIDAYS).map(([date, name]) => ({ date, name, source: 'official' })));
+                    }
+                });
+
+                const metaRef = window.doc(window.db, 'artifacts', appId, 'public', 'data', 'settings', 'calendarMeta');
+                const unsubHolidayMeta = window.onSnapshot(metaRef, (snapshot) => {
+                    if (!snapshot.exists()) {
+                        setHolidaySyncMeta(null);
+                        return;
+                    }
+                    const data = snapshot.data();
+                    const lastSyncedAt = data.lastSyncedAt?.toDate
+                        ? data.lastSyncedAt.toDate().toLocaleString('ko-KR')
+                        : '';
+                    setHolidaySyncMeta({
+                        lastSyncedAt,
+                        lastSyncedYear: data.lastSyncedYear || '',
+                        lastSyncMode: data.lastSyncMode || 'merge',
+                        lastSyncSource: data.lastSyncSource || ''
+                    });
+                });
+
+                return () => { unsubTasks(); unsubHolidays(); unsubHolidayMeta(); };
+            }, [user]);
+
+            // ... (Helpers: formatDate, getWeekDays) ...
+            const formatDate = (date) => { const d = new Date(date); return [d.getFullYear(), (''+(d.getMonth()+1)).padStart(2,'0'), (''+d.getDate()).padStart(2,'0')].join('-'); };
+            const getWeekDays = (date) => { const start = new Date(date); start.setDate(start.getDate() - start.getDay()); const days = []; for (let i=0; i<7; i++) { const d = new Date(start); d.setDate(start.getDate() + i); days.push(d); } return days; };
+            const REMINDER_MINUTE_STEP = 10;
+            const REMINDER_MINUTE_OPTIONS = ['00', '10', '20', '30', '40', '50'];
+            const normalizeReminderTime = (timeValue) => {
+                if (!timeValue || typeof timeValue !== 'string') return '';
+                const match = timeValue.match(/^(\d{1,2}):(\d{2})$/);
+                if (!match) return '';
+                const hour = Math.max(0, Math.min(23, Number(match[1])));
+                const minute = Math.max(0, Math.min(59, Number(match[2])));
+                const roundedMinute = Math.round(minute / REMINDER_MINUTE_STEP) * REMINDER_MINUTE_STEP;
+                const totalMinutes = Math.min((23 * 60) + 50, (hour * 60) + roundedMinute);
+                const hh = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+                const mm = String(totalMinutes % 60).padStart(2, '0');
+                return `${hh}:${mm}`;
+            };
+            const updateReminderHour = (hourValue) => {
+                setFormData(prev => {
+                    if (!hourValue) return { ...prev, reminderTime: '' };
+                    const currentMinute = (prev.reminderTime || '').slice(3, 5);
+                    const minute = REMINDER_MINUTE_OPTIONS.includes(currentMinute) ? currentMinute : '00';
+                    return { ...prev, reminderTime: `${hourValue}:${minute}` };
+                });
+            };
+            const updateReminderMinute = (minuteValue) => {
+                setFormData(prev => {
+                    const hour = (prev.reminderTime || '').slice(0, 2);
+                    if (!hour || !minuteValue) return prev;
+                    return { ...prev, reminderTime: `${hour}:${minuteValue}` };
+                });
+            };
+            const handleReminderToggle = (isEnabled) => {
+                setFormData(prev => ({ ...prev, reminder: isEnabled }));
+            };
+
+            // ... (Handlers) ...
+            const handleSyncHolidays = async () => {
+                if (!user) return alert("로그인 필요");
+                setIsHolidaySyncing(true);
+                try {
+                    const appId = window.CURRENT_APP_ID;
+                    const batch = window.writeBatch(window.db);
+                    const holidaysCollection = window.collection(window.db, 'artifacts', appId, 'public', 'data', 'holidays');
+                    const targetYear = String(holidaySyncYear);
+                    const officialRows = getOfficialHolidayRowsByYear(targetYear);
+
+                    if (officialRows.length === 0) {
+                        throw new Error(`${targetYear}년 기본 공휴일 데이터가 없습니다.`);
+                    }
+
+                    if (holidaySyncMode === 'overwrite') {
+                        holidayItems
+                            .filter(item => item.date.startsWith(`${targetYear}-`) && item.source !== 'custom')
+                            .forEach(item => batch.delete(window.doc(holidaysCollection, item.date)));
+                    }
+
+                    officialRows.forEach(({ date, name }) => {
+                        const docRef = window.doc(holidaysCollection, date);
+                        batch.set(docRef, {
+                            name,
+                            source: 'official',
+                            year: Number(targetYear),
+                            updatedAt: window.Timestamp.now()
+                        }, { merge: true });
+                    });
+
+                    const metaRef = window.doc(window.db, 'artifacts', appId, 'public', 'data', 'settings', 'calendarMeta');
+                    batch.set(metaRef, {
+                        lastSyncedAt: window.Timestamp.now(),
+                        lastSyncedYear: Number(targetYear),
+                        lastSyncMode: holidaySyncMode,
+                        officialCount: officialRows.length,
+                        lastSyncSource: '앱 기본 공휴일 데이터'
+                    }, { merge: true });
+
+                    await batch.commit();
+                    alert(`${targetYear}년 공휴일 ${officialRows.length}건이 ${holidaySyncMode === 'overwrite' ? '다시 반영' : '병합'}되었습니다.`);
+                } catch (e) { alert("동기화 실패: " + e.message); } finally { setIsHolidaySyncing(false); }
+            };
+
+            const handleAddHoliday = async (date, name) => {
+                if (!user) return alert("로그인 필요");
+                try {
+                    const appId = window.CURRENT_APP_ID;
+                    const holidaysCollection = window.collection(window.db, 'artifacts', appId, 'public', 'data', 'holidays');
+                    await window.setDoc(window.doc(holidaysCollection, date), {
+                        name: name,
+                        source: 'custom',
+                        year: Number(date.slice(0, 4)),
+                        updatedAt: window.Timestamp.now()
+                    }, { merge: true });
+                    alert(`${date} : ${name} 추가됨`);
+                } catch(e) { alert("저장 실패: " + e.message); }
+            };
+
+            const handlePrev = () => {
+                if (view !== 'week' && view !== 'month') return;
+                const newDate = new Date(currentDate);
+                if (view === 'week') newDate.setDate(newDate.getDate() - 7);
+                else newDate.setMonth(newDate.getMonth() - 1);
+                setCurrentDate(newDate);
+            };
+            const handleNext = () => {
+                if (view !== 'week' && view !== 'month') return;
+                const newDate = new Date(currentDate);
+                if (view === 'week') newDate.setDate(newDate.getDate() + 7);
+                else newDate.setMonth(newDate.getMonth() + 1);
+                setCurrentDate(newDate);
+            };
+
+            const openAddModal = (dateStr='') => { setEditingTask(null); const initialDate = dateStr || formatDate(new Date()); setFormData({ title: '', type: 'task', leaveType: 'annual', date: initialDate, dueDate: initialDate, priority: 'medium', importance: 'normal', progress: 0, description: '', reminder: false, reminderTime: '' }); setIsModalOpen(true); };
+            const openEditModal = (task, e) => { e.stopPropagation(); setEditingTask(task); setFormData({ ...task, dueDate: task.dueDate || task.date, reminder: task.reminder || false, reminderTime: normalizeReminderTime(task.reminderTime || '') }); setIsModalOpen(true); };
+
+            const handleSave = async () => { /* ... same ... */
+                if (!formData.title || !formData.date) return alert("제목과 날짜는 필수입니다.");
+                if (!user) return alert("로그인이 필요합니다.");
+                try {
+                    const appId = window.CURRENT_APP_ID;
+                    const tasksCollection = window.collection(window.db, 'artifacts', appId, 'public', 'data', 'tasks');
+                    const taskToSave = { ...formData, dueDate: formData.dueDate || formData.date };
+                    taskToSave.reminderTime = taskToSave.reminder ? normalizeReminderTime(taskToSave.reminderTime) : '';
+                    if (taskToSave.reminder && !taskToSave.reminderTime) return alert("알림 시간을 선택해주세요.");
+                    if (taskToSave.type === 'leave') { taskToSave.progress = 0; taskToSave.priority = 'medium'; } else { delete taskToSave.leaveType; }
+                    if (editingTask) await window.updateDoc(window.doc(tasksCollection, editingTask.id), taskToSave);
+                    else await window.addDoc(tasksCollection, { ...taskToSave, createdAt: window.Timestamp.now() });
+                    setIsModalOpen(false);
+                } catch (e) { alert("저장 실패: " + e.message); }
+            };
+
+            const handleDelete = async () => { /* ... same ... */
+                if (!editingTask || !confirm("삭제하시겠습니까?")) return;
+                try { const appId = window.CURRENT_APP_ID; const tasksCollection = window.collection(window.db, 'artifacts', appId, 'public', 'data', 'tasks'); await window.deleteDoc(window.doc(tasksCollection, editingTask.id)); setIsModalOpen(false); } catch (e) { console.error(e); }
+            };
+
+            const normalizeImportedTask = (rawTask) => {
+                const safeTask = {
+                    title: String(rawTask?.title || '').trim(),
+                    type: ['task', 'meeting', 'leave'].includes(rawTask?.type) ? rawTask.type : 'task',
+                    leaveType: rawTask?.leaveType || 'annual',
+                    date: rawTask?.date || formatDate(new Date()),
+                    dueDate: rawTask?.dueDate || rawTask?.date || formatDate(new Date()),
+                    priority: ['high', 'medium', 'low'].includes(rawTask?.priority) ? rawTask.priority : 'medium',
+                    importance: rawTask?.importance || 'normal',
+                    progress: Number.isFinite(Number(rawTask?.progress)) ? Math.max(0, Math.min(100, Number(rawTask.progress))) : 0,
+                    description: rawTask?.description || '',
+                    reminder: !!rawTask?.reminder,
+                    reminderTime: rawTask?.reminder ? normalizeReminderTime(rawTask?.reminderTime || '') : ''
+                };
+
+                if (safeTask.type === 'leave') {
+                    safeTask.progress = 0;
+                    safeTask.priority = 'medium';
+                }
+
+                if (rawTask?.createdAt?.seconds) {
+                    safeTask.createdAt = new window.Timestamp(rawTask.createdAt.seconds, rawTask.createdAt.nanoseconds || 0);
+                } else if (rawTask?.createdAt instanceof Date) {
+                    safeTask.createdAt = window.Timestamp.fromDate(rawTask.createdAt);
+                } else {
+                    safeTask.createdAt = window.Timestamp.now();
+                }
+                return safeTask;
+            };
+
+            const downloadFile = (filename, content, mimeType) => {
+                const blob = new Blob([content], { type: mimeType });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            };
+
+            const handleExportJSON = () => {
+                const payload = {
+                    exportedAt: new Date().toISOString(),
+                    tasks,
+                    holidays
+                };
+                downloadFile(`smartwork-backup-${formatDate(new Date())}.json`, JSON.stringify(payload, null, 2), 'application/json');
+            };
+
+            const handleExportCSV = () => {
+                const header = ['id', 'title', 'type', 'leaveType', 'date', 'dueDate', 'priority', 'progress', 'reminder', 'reminderTime', 'description'];
+                const escapeCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+                const rows = tasks.map((t) => [
+                    t.id, t.title, t.type, t.leaveType, t.date, t.dueDate, t.priority, t.progress, t.reminder, t.reminderTime, t.description
+                ]);
+                const csv = [header.map(escapeCell).join(','), ...rows.map(r => r.map(escapeCell).join(','))].join('\n');
+                downloadFile(`smartwork-tasks-${formatDate(new Date())}.csv`, csv, 'text/csv;charset=utf-8;');
+            };
+
+            const handleImportJSON = async (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                if (!user) return alert("로그인이 필요합니다.");
+
+                try {
+                    const text = await file.text();
+                    const parsed = JSON.parse(text);
+                    const importedTasks = Array.isArray(parsed?.tasks) ? parsed.tasks : [];
+                    const importedHolidays = parsed?.holidays && typeof parsed.holidays === 'object' ? parsed.holidays : {};
+                    if (importedTasks.length === 0 && Object.keys(importedHolidays).length === 0) {
+                        throw new Error("가져올 데이터가 없습니다.");
+                    }
+
+                    const appId = window.CURRENT_APP_ID;
+                    const batch = window.writeBatch(window.db);
+                    const tasksCollection = window.collection(window.db, 'artifacts', appId, 'public', 'data', 'tasks');
+                    const holidaysCollection = window.collection(window.db, 'artifacts', appId, 'public', 'data', 'holidays');
+
+                    importedTasks.forEach((rawTask) => {
+                        const taskDoc = normalizeImportedTask(rawTask);
+                        const docRef = rawTask?.id ? window.doc(tasksCollection, String(rawTask.id)) : window.doc(tasksCollection);
+                        batch.set(docRef, taskDoc, { merge: true });
+                    });
+
+                    Object.entries(importedHolidays).forEach(([date, name]) => {
+                        if (!date || !name) return;
+                        batch.set(window.doc(holidaysCollection, String(date)), { name: String(name) }, { merge: true });
+                    });
+
+                    await batch.commit();
+                    alert(`가져오기 완료: 업무 ${importedTasks.length}건, 공휴일 ${Object.keys(importedHolidays).length}건`);
+                } catch (e) {
+                    alert(`가져오기 실패: ${e.message}`);
+                } finally {
+                    event.target.value = '';
+                }
+            };
+
+            useEffect(() => {
+                // 알림 팝업 요청/표시 비활성화
+                return;
+            }, [tasks]);
+
+            // ... (Renderers: renderPriorityBadge, getFilteredTasks, renderWeekView, renderMonthView) ...
+            const renderPriorityBadge = (p) => { const c = { high: 'bg-rose-100 text-rose-700', medium: 'bg-amber-100 text-amber-700', low: 'bg-emerald-100 text-emerald-700' }; return <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${c[p]}`}>{p}</span>; };
+            const getFilteredTasks = (taskList) => { if (filterType === 'high') return taskList.filter(t => t.priority === 'high'); if (filterType === 'incomplete') return taskList.filter(t => t.progress < 100 && t.type !== 'leave'); return taskList; };
+            const renderWeekView = () => { /* ... existing code ... */
+                const days = getWeekDays(currentDate);
+                return (
+                    <div className="grid grid-cols-7 gap-2 h-full min-w-[800px]">
+                        {days.map((day, idx) => {
+                            const dStr = formatDate(day);
+                            const holidayName = holidays[dStr];
+                            const priorityRank = { high: 3, medium: 2, low: 1 };
+                            const dayTasks = getFilteredTasks(tasks.filter(t => t.date === dStr)).sort((a, b) => {
+                                const rankDiff = (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0);
+                                if (rankDiff !== 0) return rankDiff;
+                                return String(a.title || '').localeCompare(String(b.title || ''), 'ko');
+                            });
+                            const isToday = formatDate(new Date()) === dStr;
+                            const isRedDay = day.getDay() === 0 || holidayName;
+                            const isBlueDay = day.getDay() === 6 && !holidayName;
+                            return (
+                                <div key={idx} className={`bg-white rounded-lg border flex flex-col h-full overflow-hidden hover:shadow-md transition ${isToday?'border-blue-500 ring-1 ring-blue-500':'border-slate-200'}`}>
+                                    <div className={`p-2 text-center border-b ${isRedDay ? 'bg-red-50 text-red-600' : isBlueDay ? 'bg-blue-50 text-blue-600' : 'bg-gray-50'}`}>
+                                        <div className="text-xs font-semibold text-gray-500">{['일','월','화','수','목','금','토'][day.getDay()]}</div>
+                                        <div className={`text-lg font-bold ${isToday?'text-blue-600':''}`}>{day.getDate()}</div>
+                                        {holidayName && <div className="text-[10px] text-red-500 font-bold truncate">{holidayName}</div>}
+                                    </div>
+                                    <div className="flex-1 p-2 overflow-y-auto space-y-2 relative group" onClick={() => openAddModal(dStr)}>
+                                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none"><i className="fa-solid fa-plus text-slate-300 text-2xl"></i></div>
+                                        {dayTasks.map(task => (
+                                            <div key={task.id} onClick={(e) => openEditModal(task, e)} className={`border shadow-sm rounded p-2 cursor-pointer hover:shadow-md transition relative z-10 ${getPriorityStyle(task.priority, 'card', task.type)}`}>
+                                                <div className="flex justify-between items-start mb-1">
+                                                    <span className={`text-[10px] px-1 rounded ${task.type==='meeting'?'bg-purple-100 text-purple-700': task.type==='leave'?'bg-pink-100 text-pink-700 font-bold':'bg-white/50 text-slate-600 border'}`}>{task.type==='meeting'?'미팅': task.type==='leave'?'휴가':'할일'}</span>
+                                                    {task.reminder && <i className="fa-solid fa-bell text-[10px] opacity-70"></i>}
+                                                </div>
+                                                <div className="font-medium text-sm line-clamp-2 mb-2">{task.title}</div>
+                                                {task.type === 'leave' ? <div className="text-xs text-pink-600 font-medium mt-2 text-right">{task.leaveType === 'annual' ? '연차' : task.leaveType === 'half_am' ? '오전반차' : '오후반차'}</div> : <div className="flex justify-between items-end"><div className="flex-1 mr-2"><div className="w-full h-1.5 bg-black/5 rounded-full overflow-hidden"><div className={`h-full ${task.progress===100?'bg-green-500':'bg-brand-500'}`} style={{width:`${task.progress}%`}}></div></div></div><span className="text-xs font-bold opacity-70">{getDDay(task.dueDate || task.date)}</span></div>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                );
+            };
+            const renderMonthView = () => { /* ... existing code ... */
+                const year = currentDate.getFullYear(); const month = currentDate.getMonth(); const firstDay = new Date(year, month, 1); const startDate = new Date(firstDay); startDate.setDate(startDate.getDate() - startDate.getDay()); const rows = []; let current = new Date(startDate); while (rows.length < 6) { const week = []; for(let i=0; i<7; i++) { week.push(new Date(current)); current.setDate(current.getDate() + 1); } rows.push(week); }
+                return (
+                    <div className="flex flex-col h-full border-t border-l border-slate-200">
+                        {/* Header Row */}
+                        <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 flex-none">
+                            {['일','월','화','수','목','금','토'].map((d, i) => (
+                                <div key={i} className={`py-1 text-center text-xs font-semibold ${i===0?'text-red-500':i===6?'text-blue-500':'text-slate-500'}`}>{d}</div>
+                            ))}
+                        </div>
+                        {/* Grid Rows */}
+                        <div className="flex-1 grid grid-rows-6">
+                            {rows.map((week, wIdx) => (
+                                <div key={wIdx} className="grid grid-cols-7 border-b border-slate-200">
+                                    {week.map((day, dIdx) => {
+                                        const dStr = formatDate(day); const isCurr = day.getMonth() === month; const dayTasks = getFilteredTasks(tasks.filter(t => t.date === dStr)); const holidayName = holidays[dStr]; const isRedDay = day.getDay() === 0 || holidayName; const isBlueDay = day.getDay() === 6 && !holidayName;
+                                        return (
+                                            <div key={dIdx} onClick={() => openAddModal(dStr)} className={`border-r border-slate-200 p-1 relative hover:bg-slate-50 cursor-pointer ${!isCurr?'bg-slate-50 text-slate-400':'bg-white'}`}>
+                                                <div className="flex justify-between items-center px-1"><span className={`text-sm font-semibold ${isRedDay ? 'text-red-500': isBlueDay ? 'text-blue-500' : ''}`}>{day.getDate()}</span>{holidayName && <span className="text-[10px] text-red-500 truncate">{holidayName}</span>}</div>
+                                                <div className="mt-1 space-y-0.5 overflow-hidden h-[75%]">{dayTasks.map(t => (<div key={t.id} onClick={(e) => openEditModal(t, e)} className={`text-[10px] truncate px-1 rounded ${t.progress===100?'bg-slate-100 text-slate-400 line-through': getPriorityStyle(t.priority, 'pill', t.type)}`}>{t.title}</div>))}</div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            };
+
+            const renderTodayFocusView = () => {
+                const todayStr = formatDate(new Date());
+                const todayTasks = getFilteredTasks(tasks.filter(t => t.date === todayStr)).sort((a, b) => (a.dueDate || a.date).localeCompare(b.dueDate || b.date));
+                const overdueTasks = getFilteredTasks(tasks.filter(t => t.type !== 'leave' && t.progress < 100 && (t.dueDate || t.date) < todayStr))
+                    .sort((a, b) => (a.dueDate || a.date).localeCompare(b.dueDate || b.date));
+                return (
+                    <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="p-4 border-b border-slate-100 bg-brand-50 flex items-center justify-between">
+                                <h3 className="font-bold text-slate-800">오늘 업무</h3>
+                                <span className="text-xs px-2 py-1 rounded bg-white border border-brand-100 text-brand-700">{todayTasks.length}건</span>
+                            </div>
+                            <ul className="divide-y divide-slate-100">
+                                {todayTasks.length ? todayTasks.map(task => (
+                                    <li key={task.id} className="p-4 hover:bg-slate-50 cursor-pointer" onClick={(e) => openEditModal(task, e)}>
+                                        <div className="flex items-center justify-between gap-3">
+                                            <p className="font-medium text-slate-800 text-sm">{task.title}</p>
+                                            {renderPriorityBadge(task.priority)}
+                                        </div>
+                                        <p className="text-xs text-slate-500 mt-1">{task.type === 'meeting' ? '미팅' : task.type === 'leave' ? '휴가' : '할일'} · 마감 {task.dueDate || task.date}</p>
+                                    </li>
+                                )) : <li className="p-8 text-center text-sm text-slate-400">오늘 등록된 업무가 없습니다.</li>}
+                            </ul>
+                        </div>
+                        <div className="bg-white rounded-xl shadow-sm border border-rose-200 overflow-hidden">
+                            <div className="p-4 border-b border-rose-100 bg-rose-50 flex items-center justify-between">
+                                <h3 className="font-bold text-rose-800">지연 업무</h3>
+                                <span className="text-xs px-2 py-1 rounded bg-white border border-rose-200 text-rose-700">{overdueTasks.length}건</span>
+                            </div>
+                            <ul className="divide-y divide-slate-100">
+                                {overdueTasks.length ? overdueTasks.map(task => (
+                                    <li key={task.id} className="p-4 hover:bg-slate-50 cursor-pointer" onClick={(e) => openEditModal(task, e)}>
+                                        <div className="flex items-center justify-between gap-3">
+                                            <p className="font-medium text-slate-800 text-sm">{task.title}</p>
+                                            <span className="text-[11px] font-bold text-rose-600">D+{Math.max(1, Math.ceil((new Date() - new Date(task.dueDate || task.date)) / 86400000))}</span>
+                                        </div>
+                                        <p className="text-xs text-slate-500 mt-1">기준일 {task.dueDate || task.date} · 진행률 {task.progress || 0}%</p>
+                                    </li>
+                                )) : <li className="p-8 text-center text-sm text-slate-400">지연된 업무가 없습니다.</li>}
+                            </ul>
+                        </div>
+                    </div>
+                );
+            };
+
+            const renderTaskListView = () => {
+                const filtered = tasks.filter((t) => {
+                    const q = listSearch.trim().toLowerCase();
+                    const typeOk = listTypeFilter === 'all' || t.type === listTypeFilter;
+                    const statusOk = listStatusFilter === 'all'
+                        || (listStatusFilter === 'done' && Number(t.progress) === 100)
+                        || (listStatusFilter === 'todo' && Number(t.progress) < 100);
+                    const searchOk = !q || String(t.title || '').toLowerCase().includes(q) || String(t.description || '').toLowerCase().includes(q);
+                    return typeOk && statusOk && searchOk;
+                }).sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.title || '').localeCompare(String(b.title || ''), 'ko'));
+
+                return (
+                    <div className="max-w-6xl mx-auto space-y-4">
+                        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
+                            <input value={listSearch} onChange={(e) => setListSearch(e.target.value)} placeholder="업무명/상세 검색" className="md:col-span-2 border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-brand-500" />
+                            <select value={listTypeFilter} onChange={(e) => setListTypeFilter(e.target.value)} className="border border-slate-300 rounded-lg p-2.5 text-sm outline-none bg-white">
+                                <option value="all">유형 전체</option>
+                                <option value="task">할일</option>
+                                <option value="meeting">미팅</option>
+                                <option value="leave">휴가</option>
+                            </select>
+                            <select value={listStatusFilter} onChange={(e) => setListStatusFilter(e.target.value)} className="border border-slate-300 rounded-lg p-2.5 text-sm outline-none bg-white">
+                                <option value="all">상태 전체</option>
+                                <option value="todo">미완료</option>
+                                <option value="done">완료</option>
+                            </select>
+                        </div>
+                        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+                                <h3 className="font-bold text-slate-800">업무 목록</h3>
+                                <span className="text-xs text-slate-500">총 {filtered.length}건</span>
+                            </div>
+                            <ul className="divide-y divide-slate-100 max-h-[65vh] overflow-auto">
+                                {filtered.length ? filtered.map(task => (
+                                    <li key={task.id} className="p-4 hover:bg-slate-50 cursor-pointer" onClick={(e) => openEditModal(task, e)}>
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <p className="font-medium text-slate-800 text-sm truncate">{task.title}</p>
+                                                <p className="text-xs text-slate-500 mt-1">{task.date} · {task.type === 'meeting' ? '미팅' : task.type === 'leave' ? '휴가' : '할일'} · 진행률 {task.progress || 0}%</p>
+                                            </div>
+                                            <div className="shrink-0">{renderPriorityBadge(task.priority || 'medium')}</div>
+                                        </div>
+                                    </li>
+                                )) : <li className="p-10 text-center text-sm text-slate-400">조건에 맞는 업무가 없습니다.</li>}
+                            </ul>
+                        </div>
+                    </div>
+                );
+            };
+
+            const renderBackupView = () => {
+                return (
+                    <div className="max-w-4xl mx-auto space-y-6">
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="p-5 border-b border-slate-100 bg-emerald-50">
+                                <h3 className="font-bold text-lg text-emerald-900">데이터 백업</h3>
+                                <p className="text-sm text-emerald-700">현재 업무/공휴일 데이터를 파일로 보관합니다.</p>
+                            </div>
+                            <div className="p-6 flex flex-wrap gap-3">
+                                <button onClick={handleExportJSON} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700">
+                                    <i className="fa-solid fa-file-arrow-down mr-2"></i>JSON 백업
+                                </button>
+                                <button onClick={handleExportCSV} className="px-4 py-2 rounded-lg bg-slate-700 text-white text-sm font-bold hover:bg-slate-800">
+                                    <i className="fa-solid fa-file-csv mr-2"></i>CSV 내보내기
+                                </button>
+                            </div>
+                        </div>
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="p-5 border-b border-slate-100 bg-amber-50">
+                                <h3 className="font-bold text-lg text-amber-900">데이터 복원/가져오기</h3>
+                                <p className="text-sm text-amber-700">JSON 백업 파일을 업로드하면 기존 데이터에 병합됩니다.</p>
+                            </div>
+                            <div className="p-6 space-y-3">
+                                <input ref={fileInputRef} type="file" accept=".json,application/json" onChange={handleImportJSON} className="block w-full text-sm text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-amber-100 file:text-amber-800 file:font-semibold hover:file:bg-amber-200" />
+                                <p className="text-xs text-slate-500">JSON 구조: {'{'} tasks: [...], holidays: {'{'}...{'}'} {'}'}</p>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+
+            return (
+                <div className="flex h-screen w-full bg-slate-100">
+                    <aside className="w-64 bg-slate-900 text-white hidden md:flex flex-col shadow-2xl z-20">
+                        <div className="p-8 border-b border-slate-800">
+                            <h1 className="text-2xl font-black text-white tracking-tighter flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-500 to-indigo-600 flex items-center justify-center text-base shadow-lg">
+                                    <i className="fa-solid fa-calendar-check"></i>
+                                </div>
+                                <span>SmartWork<span className="text-blue-500">.Pro</span></span>
+                            </h1>
+                            <p className="text-slate-500 text-[10px] mt-1 uppercase tracking-widest font-bold">Enterprise Solution</p>
+                        </div>
+                        <nav className="flex-1 px-4 py-4 space-y-2 overflow-y-auto">
+                            <button onClick={() => setView('dashboard')} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-200 group ${view === 'dashboard' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50 translate-x-1' : 'text-slate-400 hover:bg-slate-800 hover:text-white hover:translate-x-1'}`}><i className="fa-solid fa-chart-line w-5"></i><span>대시보드</span>{view === 'dashboard' && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-300"></div>}</button>
+                            <button onClick={() => setView('today')} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-200 group ${view === 'today' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50 translate-x-1' : 'text-slate-400 hover:bg-slate-800 hover:text-white hover:translate-x-1'}`}><i className="fa-solid fa-list-check w-5"></i><span>오늘·지연 업무</span>{view === 'today' && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-300"></div>}</button>
+                            <button onClick={() => setView('list')} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-200 group ${view === 'list' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50 translate-x-1' : 'text-slate-400 hover:bg-slate-800 hover:text-white hover:translate-x-1'}`}><i className="fa-solid fa-table-list w-5"></i><span>업무 목록</span>{view === 'list' && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-300"></div>}</button>
+                            <div className="pt-4 pb-2 px-4 text-[10px] font-bold tracking-widest uppercase text-slate-500">Calendar Views</div>
+                            <button onClick={() => setView('week')} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-200 group ${view === 'week' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50 translate-x-1' : 'text-slate-400 hover:bg-slate-800 hover:text-white hover:translate-x-1'}`}><i className="fa-solid fa-calendar-week w-5"></i><span>주간 캘린더</span>{view === 'week' && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-300"></div>}</button>
+                            <button onClick={() => setView('month')} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-200 group ${view === 'month' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50 translate-x-1' : 'text-slate-400 hover:bg-slate-800 hover:text-white hover:translate-x-1'}`}><i className="fa-solid fa-calendar-days w-5"></i><span>월간 캘린더</span>{view === 'month' && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-300"></div>}</button>
+                            <div className="pt-4 pb-2 px-4 text-[10px] font-bold tracking-widest uppercase text-slate-500">Configuration</div>
+                            <button onClick={() => setView('backup')} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-200 group ${view === 'backup' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50 translate-x-1' : 'text-slate-400 hover:bg-slate-800 hover:text-white hover:translate-x-1'}`}><i className="fa-solid fa-database w-5"></i><span>백업·복원</span>{view === 'backup' && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-300"></div>}</button>
+                            <button onClick={() => setView('settings')} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-200 group ${view === 'settings' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50 translate-x-1' : 'text-slate-400 hover:bg-slate-800 hover:text-white hover:translate-x-1'}`}><i className="fa-solid fa-gear w-5"></i><span>설정</span>{view === 'settings' && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-300"></div>}</button>
+                        </nav>
+                        <div className="p-6 border-t border-slate-800">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-500 to-indigo-600 flex items-center justify-center font-bold text-sm shadow-lg">A</div>
+                                <div className="leading-tight">
+                                    <div className="text-sm font-bold truncate">{window.OFFICEFLOW_SESSION?.session?.name || '사용자'}</div>
+                                    <div className="text-xs text-slate-500">시스템 마스터</div>
+                                </div>
+                            </div>
+                            <div className={`mt-4 flex items-center gap-2 text-[11px] font-semibold px-2.5 py-2 rounded-lg border ${user ? 'text-emerald-300 bg-emerald-900/20 border-emerald-900/40' : 'text-amber-300 bg-amber-900/20 border-amber-900/40'}`}>
+                                <i className="fa-solid fa-cloud"></i>
+                                <span>{user ? '클라우드 연동됨' : '클라우드 연결중'}</span>
+                            </div>
+                        </div>
+                    </aside>
+
+                    <main className="flex-1 flex flex-col h-full relative overflow-hidden">
+                        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shadow-sm z-10">
+                            <div className="flex items-center gap-4">
+                                <button onClick={() => setView('dashboard')} className="md:hidden text-slate-500"><i className="fa-solid fa-bars"></i></button>
+                                <div className="flex items-center gap-2">
+                                    <button onClick={handlePrev} className="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-500"><i className="fa-solid fa-chevron-left"></i></button>
+                                    <h2 className="text-xl font-bold text-slate-800 min-w-[150px] text-center">
+                                        {view === 'today' ? '오늘·지연 업무' : view === 'list' ? '업무 목록' : view === 'backup' ? '백업·복원' : currentDate.getFullYear() + '년 ' + (currentDate.getMonth()+1) + '월'}
+                                        {view==='week' && <span className="text-sm font-normal text-slate-500 ml-2">({Math.ceil(currentDate.getDate()/7)}주)</span>}
+                                    </h2>
+                                    <button onClick={handleNext} className="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-500"><i className="fa-solid fa-chevron-right"></i></button>
+                                </div>
+                                <button onClick={() => setCurrentDate(new Date())} className="text-sm text-brand-600 hover:underline">오늘</button>
+                            </div>
+                            
+                            <div className="flex items-center gap-3">
+                                {view !== 'dashboard' && view !== 'settings' && view !== 'today' && view !== 'list' && view !== 'backup' && (
+                                    <div className="bg-slate-100 p-1 rounded-lg flex text-xs font-medium mr-2">
+                                        <button onClick={() => setFilterType('all')} className={`px-3 py-1.5 rounded-md transition ${filterType==='all'?'bg-white shadow-sm text-brand-600':'text-slate-500 hover:text-slate-700'}`}>전체</button>
+                                        <button onClick={() => setFilterType('high')} className={`px-3 py-1.5 rounded-md transition ${filterType==='high'?'bg-white shadow-sm text-red-600':'text-slate-500 hover:text-slate-700'}`}>중요</button>
+                                        <button onClick={() => setFilterType('incomplete')} className={`px-3 py-1.5 rounded-md transition ${filterType==='incomplete'?'bg-white shadow-sm text-indigo-600':'text-slate-500 hover:text-slate-700'}`}>미완료</button>
+                                    </div>
+                                )}
+                                <button onClick={() => openAddModal()} className="bg-brand-600 hover:bg-brand-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-brand-200 shadow-lg flex items-center gap-2 transition">
+                                    <i className="fa-solid fa-plus"></i> <span className="hidden sm:inline">업무 등록</span>
+                                </button>
+                            </div>
+                        </header>
+
+                        <div className="flex-1 overflow-auto p-6 relative">
+                            {loading ? (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-white bg-opacity-80 z-50">
+                                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-600 mb-4"></div>
+                                    <p className="text-slate-500 font-medium">{errorMsg || "클라우드 연결중..."}</p>
+                                    {errorMsg && <p className="text-xs text-red-500 mt-2 max-w-md text-center bg-red-50 p-2 rounded">{errorMsg}</p>}
+                                </div>
+                            ) : (
+                                <React.Fragment>
+                                    {view === 'dashboard' ? (
+                                        <div className="max-w-5xl mx-auto">
+                                            <h1 className="text-2xl font-bold text-slate-800 mb-6">업무 현황 대시보드</h1>
+                                            <DashboardStats tasks={tasks} holidays={holidays} />
+                                            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                                                <div className="p-4 border-b border-slate-100 bg-gray-50"><h3 className="font-bold text-slate-800">최근 업데이트</h3></div>
+                                                <ul className="divide-y divide-slate-100">
+                                                    {[...tasks].sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0)).slice(0, 5).map(task => (
+                                                        <li key={task.id} className="p-4 hover:bg-slate-50 flex items-center justify-between cursor-pointer" onClick={(e) => openEditModal(task, e)}>
+                                                            <div className="flex items-center gap-3">
+                                                                <div className={`w-2 h-2 rounded-full ${task.progress===100?'bg-green-500':'bg-brand-500'}`}></div>
+                                                                <div><p className="font-medium text-slate-800 text-sm">{task.title}</p><p className="text-xs text-slate-400">{task.date} · {task.type==='meeting'?'미팅': task.type==='leave'?'휴가':'할일'}</p></div>
+                                                            </div>
+                                                            <div className="flex items-center gap-4"><div className="w-24 h-2 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-brand-500" style={{width: `${task.progress}%`}}></div></div><span className="text-xs font-mono text-slate-500">{task.progress}%</span></div>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    ) : view === 'settings' ? (
+                                        <SettingsView
+                                            holidays={holidays}
+                                            holidayItems={holidayItems}
+                                            onSyncHolidays={handleSyncHolidays}
+                                            isSyncing={isHolidaySyncing}
+                                            onAddHoliday={handleAddHoliday}
+                                            syncYear={holidaySyncYear}
+                                            setSyncYear={setHolidaySyncYear}
+                                            syncMode={holidaySyncMode}
+                                            setSyncMode={setHolidaySyncMode}
+                                            syncMeta={holidaySyncMeta}
+                                            holidayYearOptions={holidayYearOptions}
+                                        />
+                                    ) : view === 'today' ? renderTodayFocusView()
+                                      : view === 'list' ? renderTaskListView()
+                                      : view === 'backup' ? renderBackupView()
+                                      : view === 'week' ? renderWeekView() : renderMonthView()}
+                                </React.Fragment>
+                            )}
+                        </div>
+                    </main>
+
+                    <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingTask ? "업무 수정" : "새 업무 등록"}>
+                        <div className="space-y-4">
+                            <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">업무명</label><input type="text" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-brand-500" placeholder="예: 주간 기획 회의" /></div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">시작일/실행일</label><input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none" /></div>
+                                {formData.type !== 'leave' && <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">마감일 (Deadline)</label><input type="date" value={formData.dueDate} onChange={e => setFormData({...formData, dueDate: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none bg-white" /></div>}
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">유형</label>
+                                <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none bg-white">
+                                    <option value="task">할일 (Task)</option>
+                                    <option value="meeting">미팅 (Meeting)</option>
+                                    <option value="leave">휴가 (Leave)</option>
+                                </select>
+                            </div>
+                            
+                            {/* Leave Specific Options */}
+                            {formData.type === 'leave' && (
+                                <div className="bg-pink-50 p-3 rounded-lg border border-pink-200">
+                                    <label className="block text-xs font-semibold text-pink-700 uppercase mb-2">휴가 종류</label>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => setFormData({...formData, leaveType: 'annual'})} className={`flex-1 py-2 text-xs font-bold rounded border ${formData.leaveType==='annual'?'bg-pink-500 text-white border-pink-600':'bg-white text-pink-500 border-pink-200'}`}>연차</button>
+                                        <button onClick={() => setFormData({...formData, leaveType: 'half_am'})} className={`flex-1 py-2 text-xs font-bold rounded border ${formData.leaveType==='half_am'?'bg-pink-500 text-white border-pink-600':'bg-white text-pink-500 border-pink-200'}`}>오전 반차</button>
+                                        <button onClick={() => setFormData({...formData, leaveType: 'half_pm'})} className={`flex-1 py-2 text-xs font-bold rounded border ${formData.leaveType==='half_pm'?'bg-pink-500 text-white border-pink-600':'bg-white text-pink-500 border-pink-200'}`}>오후 반차</button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Options Hidden for Leave */}
+                            {formData.type !== 'leave' && (
+                                <>
+                                    <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <input type="checkbox" id="reminderCheck" checked={formData.reminder} onChange={e => handleReminderToggle(e.target.checked)} className="w-4 h-4 text-brand-600 rounded focus:ring-brand-500 border-gray-300"/>
+                                            <label htmlFor="reminderCheck" className="text-sm font-semibold text-slate-700">알림(예약) 설정</label>
+                                        </div>
+                                        {formData.reminder && <p className="text-[11px] text-slate-500 mb-2">알림 팝업은 비활성화 상태이며, 일정 시간만 저장됩니다.</p>}
+                                        {formData.reminder && (
+                                            <div>
+                                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">알림 시간 (10분 단위)</label>
+                                                <div className="grid grid-cols-2 gap-2">
+                                                    <select
+                                                        value={(formData.reminderTime || '').slice(0, 2)}
+                                                        onChange={e => updateReminderHour(e.target.value)}
+                                                        className="w-full border border-slate-300 rounded-lg p-2 text-sm outline-none bg-white"
+                                                    >
+                                                        <option value="">시 선택</option>
+                                                        {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(hour => (
+                                                            <option key={hour} value={hour}>{hour}시</option>
+                                                        ))}
+                                                    </select>
+                                                    <select
+                                                        value={(formData.reminderTime || '').slice(3, 5)}
+                                                        onChange={e => updateReminderMinute(e.target.value)}
+                                                        disabled={!formData.reminderTime}
+                                                        className="w-full border border-slate-300 rounded-lg p-2 text-sm outline-none bg-white disabled:bg-slate-100 disabled:text-slate-400"
+                                                    >
+                                                        <option value="">분 선택</option>
+                                                        {REMINDER_MINUTE_OPTIONS.map(minute => (
+                                                            <option key={minute} value={minute}>{minute}분</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <p className="text-[11px] text-slate-500">분은 10분 단위만 선택할 수 있습니다.</p>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">중요도</label><div className="flex gap-2">{['high','medium','low'].map(p => (<button key={p} onClick={() => setFormData({...formData, priority: p})} className={`flex-1 py-2 text-xs font-bold uppercase rounded border ${formData.priority===p?(p==='high'?'bg-red-50 border-red-500 text-red-600':p==='medium'?'bg-yellow-50 border-yellow-500 text-yellow-600':'bg-green-50 border-green-500 text-green-600'):'border-slate-200 text-slate-400'}`}>{p}</button>))}</div></div>
+                                        <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">진행률 ({formData.progress}%)</label><input type="range" min="0" max="100" step="10" value={formData.progress} onChange={e => setFormData({...formData, progress: parseInt(e.target.value)})} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-brand-600 mt-2" /></div>
+                                    </div>
+                                </>
+                            )}
+                            
+                            <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">상세 내용</label><textarea value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} rows="3" className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none resize-none" placeholder="상세 내용을 입력하세요."></textarea></div>
+                            <div className="pt-4 flex gap-3">
+                                {editingTask && <button onClick={handleDelete} className="px-4 py-2.5 rounded-lg text-sm font-bold text-red-500 hover:bg-red-50 transition border border-red-100">삭제</button>}
+                                <button onClick={handleSave} className="flex-1 bg-brand-600 hover:bg-brand-700 text-white px-4 py-2.5 rounded-lg text-sm font-bold shadow-lg shadow-brand-200 transition">{editingTask ? '수정 저장' : '등록하기'}</button>
+                            </div>
+                        </div>
+                    </Modal>
+
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

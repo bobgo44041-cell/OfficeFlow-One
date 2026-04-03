@@ -1,0 +1,2007 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>해외출장 통합 관리 시스템</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts (Noto Sans KR) -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Firebase SDK (v9 Modular) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getStorage, ref, uploadBytes, uploadString, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
+
+        // 전역 스코프에 Firebase 함수 노출
+        window.firebaseModules = {
+            initializeApp, getAuth, signInWithCustomToken, onAuthStateChanged,
+            getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, serverTimestamp,
+            getStorage, ref, uploadBytes, uploadString, getDownloadURL, deleteObject, getAnalytics
+        };
+    </script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        corp: { 50: '#f0f4f8', 100: '#d9e2ec', 500: '#102a43', 600: '#243b53', 900: '#829ab1' },
+                        brand: { 500: '#3366FF', 600: '#254EDB' }
+                    },
+                    fontSize: {
+                        'xxs': '0.65rem'
+                    },
+                    animation: {
+                        'fade-in': 'fadeIn 0.5s ease-out',
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        :root {
+            --bg-base: #eef3f8;
+            --bg-soft: rgba(255, 255, 255, 0.72);
+            --bg-strong: rgba(255, 255, 255, 0.92);
+            --line-soft: rgba(148, 163, 184, 0.18);
+            --line-strong: rgba(71, 85, 105, 0.12);
+            --text-main: #0f172a;
+            --text-sub: #64748b;
+            --nav-bg: linear-gradient(180deg, #0f2740 0%, #122f4f 42%, #0d2237 100%);
+            --accent: #1d4ed8;
+            --accent-soft: rgba(29, 78, 216, 0.1);
+            --shadow-soft: 0 18px 45px rgba(15, 23, 42, 0.08);
+            --shadow-card: 0 12px 30px rgba(15, 23, 42, 0.06);
+        }
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(59, 130, 246, 0.09), transparent 28%),
+                radial-gradient(circle at top right, rgba(16, 42, 67, 0.08), transparent 22%),
+                linear-gradient(180deg, #f6f9fc 0%, var(--bg-base) 100%);
+            color: var(--text-main);
+        }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .sidebar-scroll-hidden {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        .sidebar-scroll-hidden::-webkit-scrollbar {
+            display: none;
+        }
+        .dashboard-card { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+        .dashboard-card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
+        .bg-pattern {
+            background-image:
+                radial-gradient(rgba(148, 163, 184, 0.18) 1px, transparent 1px),
+                linear-gradient(180deg, rgba(255,255,255,0.42), rgba(255,255,255,0.12));
+            background-size: 20px 20px, auto;
+        }
+        .map-dot { transition: all 0.3s ease; }
+        .map-dot:hover { transform: scale(1.5); z-index: 50; }
+        .glass-panel {
+            background: var(--bg-soft);
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            border: 1px solid var(--line-soft);
+            box-shadow: var(--shadow-card);
+        }
+        .section-shell {
+            background: var(--bg-strong);
+            border: 1px solid var(--line-soft);
+            box-shadow: var(--shadow-card);
+        }
+        .hero-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            padding: 0.45rem 0.8rem;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.65);
+            border: 1px solid rgba(255,255,255,0.5);
+            color: #334155;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+        .sidebar-link-active {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.22), rgba(34, 211, 238, 0.08));
+            border-color: rgba(96, 165, 250, 0.28);
+            color: #ffffff;
+            box-shadow: 0 12px 28px rgba(8, 47, 73, 0.28);
+        }
+        .sidebar-link-idle {
+            border-color: transparent;
+            color: rgba(226, 232, 240, 0.72);
+            background: transparent;
+        }
+        .sidebar-link-idle:hover {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.045);
+            border-color: rgba(255,255,255,0.06);
+        }
+        .sidebar-icon-tile {
+            width: 2.5rem;
+            height: 2.5rem;
+            border-radius: 1rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: rgba(226, 232, 240, 0.88);
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+        .sidebar-link-active .sidebar-icon-tile {
+            background: rgba(255,255,255,0.14);
+            border-color: rgba(255,255,255,0.14);
+            color: #ffffff;
+        }
+        .sidebar-link-idle:hover .sidebar-icon-tile {
+            background: rgba(255,255,255,0.1);
+            color: #ffffff;
+        }
+        .bar-grow { animation: growHeight 1s ease-out forwards; transform-origin: bottom; }
+        @keyframes growHeight { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+    </style>
+</head>
+<body class="h-screen overflow-hidden text-slate-800">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // ---------------------------------------------------------
+        // 1. Core Logic & Setup
+        // ---------------------------------------------------------
+        const { initializeApp, getAuth, signInWithCustomToken, onAuthStateChanged,
+                getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, serverTimestamp,
+                getStorage, ref, uploadBytes, uploadString, getDownloadURL, deleteObject, getAnalytics } = window.firebaseModules;
+
+        // [수정됨] 하이브리드 설정 적용
+        const OFFICEFLOW_STORAGE_KEY = 'officeflow-one-mvp-state';
+        const officeflowFirebaseConfig = {
+            apiKey: "AIzaSyBfT58Y9XwjalTk0E0NPBWqkVVVOWN9zFQ",
+            authDomain: "officeflow-one.firebaseapp.com",
+            projectId: "officeflow-one",
+            storageBucket: "officeflow-one.firebasestorage.app",
+            messagingSenderId: "1084176732785",
+            appId: "1:1084176732785:web:56e241ddcdb69afdf101d0",
+            measurementId: "G-SYP4NQMGP7"
+        };
+
+        function readOfficeFlowState() {
+            try {
+                const raw =
+                    window.parent && window.parent !== window
+                        ? window.parent.localStorage.getItem(OFFICEFLOW_STORAGE_KEY)
+                        : localStorage.getItem(OFFICEFLOW_STORAGE_KEY);
+                return raw ? JSON.parse(raw) : null;
+            } catch (error) {
+                console.warn('OfficeFlow state unavailable', error);
+                return null;
+            }
+        }
+
+        const officeflowState = readOfficeFlowState();
+        const officeflowSession = officeflowState?.session?.authenticated ? officeflowState.session : null;
+        const officeflowUid = String(officeflowSession?.uid || '').trim();
+        const officeflowEmail = String(officeflowSession?.email || '').toLowerCase().trim();
+        const travelUserKey = (officeflowUid || officeflowEmail || 'guest').replace(/[^a-z0-9]+/gi, '_');
+
+        let firebaseConfig;
+        if (typeof window.__firebase_config !== 'undefined' && window.__firebase_config) {
+            firebaseConfig = JSON.parse(window.__firebase_config);
+        } else {
+            firebaseConfig = officeflowFirebaseConfig;
+        }
+
+        const app = initializeApp(firebaseConfig);
+        let analytics;
+        try { analytics = getAnalytics(app); } catch(e) { console.log("Analytics not supported in this env"); }
+        
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const storage = getStorage(app);
+        
+        const appId = window.__app_id || `ofw-travel-manager-${travelUserKey}`;
+
+        // Helper: Currency Formatter
+        const formatMoney = (amount) => {
+            if (!amount) return '0';
+            return new Intl.NumberFormat('ko-KR').format(amount);
+        };
+
+        const getLocalDateString = (date = new Date()) => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        const parseLocalDate = (dateStr) => {
+            if (!dateStr) return null;
+            const [year, month, day] = dateStr.split('-').map(Number);
+            if (!year || !month || !day) return null;
+            return new Date(year, month - 1, day);
+        };
+
+        // Helper: Date Diff
+        const getDaysRemaining = (dateStr) => {
+            if (!dateStr) return -999;
+            const today = parseLocalDate(getLocalDateString());
+            const target = parseLocalDate(dateStr);
+            if (!target) return -999;
+            const diff = target - today;
+            return Math.ceil(diff / (1000 * 60 * 60 * 24));
+        };
+
+        // Mock City Coords
+        const getCityCoords = (city) => {
+            const COORDS = {
+                'ICN': {top:38,left:82}, 'SEOUL':{top:38,left:82}, 'NRT':{top:38,left:86}, 'TOKYO':{top:38,left:86},
+                'PEK':{top:36,left:78}, 'SIN':{top:58,left:76}, 'LHR':{top:26,left:48}, 'CDG':{top:29,left:49},
+                'JFK':{top:34,left:26}, 'LAX':{top:39,left:14}, 'SFO':{top:37,left:13}, 'DXB':{top:44,left:63},
+                'HAN':{top:45,left:77}, 'SGN':{top:52,left:78}, 'SYD':{top:80,left:89}, 'FRA':{top:28,left:50},
+                'MUC':{top:29,left:51}, 'BCN':{top:32,left:48}, 'FCO':{top:33,left:51}, 'IST':{top:34,left:56}
+            };
+            if (!city) return { top: 45, left: 50 };
+            const key = city.toUpperCase().replace(/[^A-Z]/g, '');
+            for (const [k, v] of Object.entries(COORDS)) {
+                if (key.includes(k) || k.includes(key)) return v;
+            }
+            return { top: 45, left: 50 };
+        };
+
+        const COMMON_AIRPORT_OPTIONS = [
+            'ICN - 인천', 'GMP - 김포', 'NRT - 도쿄 나리타', 'HND - 도쿄 하네다', 'KIX - 오사카 간사이',
+            'PVG - 상하이 푸동', 'PEK - 베이징', 'CAN - 광저우', 'SIN - 싱가포르', 'BKK - 방콕',
+            'HAN - 하노이', 'SGN - 호치민', 'LHR - 런던 히드로', 'CDG - 파리 샤를드골', 'FRA - 프랑크푸르트',
+            'JFK - 뉴욕', 'LAX - 로스앤젤레스', 'SFO - 샌프란시스코', 'SEA - 시애틀', 'DXB - 두바이'
+        ];
+
+        // Helper: CSV Download
+        const downloadCSV = (data, filename) => {
+            const escapeCell = (cell) => {
+                const value = String(cell ?? '');
+                return `"${value.replace(/"/g, '""')}"`;
+            };
+            const csvContent = "data:text/csv;charset=utf-8,\uFEFF" 
+                + data.map(row => row.map(escapeCell).join(",")).join("\n");
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", filename);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+
+        // ---------------------------------------------------------
+        // 2. UI Components
+        // ---------------------------------------------------------
+        
+        const Badge = ({ children, color = 'gray', className = '' }) => {
+            const colors = {
+                gray: 'bg-slate-100/90 text-slate-700 border-slate-200/80',
+                blue: 'bg-blue-50/90 text-blue-700 border-blue-200/80',
+                green: 'bg-emerald-50/90 text-emerald-700 border-emerald-200/80',
+                red: 'bg-rose-50/90 text-rose-700 border-rose-200/80',
+                yellow: 'bg-amber-50/90 text-amber-700 border-amber-200/80',
+                purple: 'bg-purple-50/90 text-purple-700 border-purple-200/80',
+                orange: 'bg-orange-50/90 text-orange-700 border-orange-200/80 font-bold'
+            };
+            return <span className={`px-2.5 py-1 rounded-full text-[11px] border ${colors[color]} ${className}`}>{children}</span>;
+        };
+
+        // ---------------------------------------------------------
+        // 3. Main Application
+        // ---------------------------------------------------------
+        const App = () => {
+            const [user, setUser] = React.useState(null);
+            const [view, setView] = React.useState('dashboard');
+            const [employees, setEmployees] = React.useState([]);
+            const [trips, setTrips] = React.useState([]);
+            const [loading, setLoading] = React.useState(true);
+            const [empModal, setEmpModal] = React.useState({ open: false, data: null });
+            const [tripModal, setTripModal] = React.useState({ open: false, data: null });
+            const [tripDetail, setTripDetail] = React.useState(null);
+            const [dbStatus, setDbStatus] = React.useState('connecting'); // connecting, online, error
+            const [employeeVisaRows, setEmployeeVisaRows] = React.useState([]);
+            const [densityMode, setDensityMode] = React.useState(localStorage.getItem('travel_density_mode') || 'comfortable');
+            const [appSettings, setAppSettings] = React.useState(() => {
+                try {
+                    return JSON.parse(localStorage.getItem('travel_app_settings') || '{}');
+                } catch {
+                    return {};
+                }
+            });
+            
+            // Year Filter Logic
+            const [selectedYear, setSelectedYear] = React.useState(new Date().getFullYear());
+            const availableYears = React.useMemo(() => {
+                const years = new Set(trips.map(t => t.startDate ? parseInt(t.startDate.split('-')[0]) : null).filter(Boolean));
+                years.add(new Date().getFullYear());
+                return Array.from(years).sort((a,b) => b-a);
+            }, [trips]);
+
+            // Filter Trips by Year
+            const filteredTripsByYear = React.useMemo(() => {
+                return trips.filter(t => t.startDate && t.startDate.startsWith(selectedYear.toString()));
+            }, [trips, selectedYear]);
+
+            const openEmployeeModal = (employee = null) => {
+                setEmployeeVisaRows(employee?.visas?.length ? employee.visas : [{ country: '', type: '', expiry: '' }]);
+                setEmpModal({ open: true, data: employee });
+            };
+
+            const closeEmployeeModal = () => {
+                setEmpModal({ open: false, data: null });
+                setEmployeeVisaRows([]);
+            };
+
+            React.useEffect(() => {
+                let unsubEmp = null;
+                let unsubTrip = null;
+                const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+                    if (unsubEmp) { unsubEmp(); unsubEmp = null; }
+                    if (unsubTrip) { unsubTrip(); unsubTrip = null; }
+
+                    setUser(u);
+                    if (!u) {
+                        setEmployees([]);
+                        setTrips([]);
+                        setLoading(false);
+                        return;
+                    }
+
+                    const qEmp = query(collection(db, 'artifacts', appId, 'public', 'data', 'employees_pro'));
+                    const qTrip = query(collection(db, 'artifacts', appId, 'public', 'data', 'trips_pro'));
+
+                    unsubEmp = onSnapshot(qEmp, 
+                        (s) => {
+                            const data = s.docs.map(d => ({id: d.id, ...d.data()}));
+                            data.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                            setEmployees(data);
+                            setDbStatus('online');
+                        }, 
+                        (err) => {
+                            console.error("Employee Load Error:", err);
+                            setDbStatus('error');
+                        }
+                    );
+                    
+                    unsubTrip = onSnapshot(qTrip, 
+                        (s) => {
+                            const data = s.docs.map(d => ({id: d.id, ...d.data()}));
+                            data.sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''));
+                            setTrips(data);
+                            setLoading(false);
+                            setDbStatus('online');
+                        },
+                        (err) => {
+                            console.error("Trip Load Error:", err);
+                            setDbStatus('error');
+                        }
+                    );
+                });
+
+                const initAuth = async () => {
+                    try {
+                        if(typeof window.__initial_auth_token !== 'undefined' && window.__initial_auth_token) {
+                            try {
+                                await signInWithCustomToken(auth, window.__initial_auth_token);
+                                return;
+                            } catch (err) {
+                                console.warn("Token mismatch, fallback to anonymous:", err);
+                            }
+                        }
+                        if (officeflowEmail) {
+                            window.setTimeout(() => {
+                                if (!auth.currentUser) {
+                                    setDbStatus('connecting');
+                                    setLoading(false);
+                                }
+                            }, 2500);
+                        } else if (!auth.currentUser) {
+                            setDbStatus('error');
+                            setLoading(false);
+                            setEmployees([]);
+                            setTrips([]);
+                        }
+                    } catch (err) {
+                        console.error("Auth init failed:", err);
+                        setDbStatus('error');
+                        setLoading(false);
+                    }
+                };
+                initAuth();
+
+                return () => {
+                    if (unsubEmp) unsubEmp();
+                    if (unsubTrip) unsubTrip();
+                    unsubscribeAuth();
+                };
+            }, []);
+
+            React.useEffect(() => {
+                localStorage.setItem('travel_density_mode', densityMode);
+            }, [densityMode]);
+
+            React.useEffect(() => {
+                localStorage.setItem('travel_app_settings', JSON.stringify(appSettings));
+            }, [appSettings]);
+
+            // --- Handlers (CRUD) ---
+            const handleSaveEmployee = async (e) => {
+                e.preventDefault();
+                const form = new FormData(e.target);
+                const visasRaw = employeeVisaRows
+                    .map(v => ({
+                        country: (v.country || '').trim().toUpperCase(),
+                        type: (v.type || '').trim(),
+                        expiry: v.expiry || ''
+                    }))
+                    .filter(v => v.country || v.type || v.expiry);
+                
+                const data = {
+                    name: form.get('name'), empId: form.get('empId'), dept: form.get('dept'), position: form.get('position'),
+                    profile: {
+                        englishName: form.get('englishName'),
+                        nationality: form.get('nationality'),
+                        emergencyContact: form.get('emergencyContact'),
+                        frequentCountries: (form.get('frequentCountries') || '').split(',').map(v => v.trim()).filter(Boolean)
+                    },
+                    passport: { number: form.get('pp_number'), expiry: form.get('pp_expiry'), country: form.get('pp_country') },
+                    visas: visasRaw, updatedAt: serverTimestamp()
+                };
+
+                // [수정됨] Try-Catch 추가로 저장 버튼 무반응 방지
+                try {
+                    if(empModal.data?.id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'employees_pro', empModal.data.id), data);
+                    else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'employees_pro'), data);
+                    
+                    closeEmployeeModal();
+                    // 성공 메시지는 선택사항 (너무 잦으면 방해될 수 있음)
+                } catch (err) {
+                    console.error("저장 실패:", err);
+                    alert("저장에 실패했습니다.\n\n원인: " + err.message + "\n\nFirebase 연결 상태와 Firestore 보안 규칙을 확인해주세요.");
+                }
+            };
+
+            const handleDeleteEmployee = async (employee) => {
+                if (!employee?.id) return;
+
+                const linkedTrips = trips.filter(trip => trip.empId === employee.id || trip.empName === employee.name);
+                if (linkedTrips.length > 0) {
+                    alert("이 임직원은 연결된 출장 데이터가 있어 삭제할 수 없습니다.\n먼저 출장 데이터를 정리해주세요.");
+                    return;
+                }
+
+                if (!confirm(`'${employee.name}' 임직원 정보를 삭제하시겠습니까?`)) return;
+
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'employees_pro', employee.id));
+                    closeEmployeeModal();
+                } catch (err) {
+                    alert("삭제 실패: " + err.message);
+                }
+            };
+
+            const handleSaveTripData = async (data, id) => {
+                const previousTrip = id ? trips.find(t => t.id === id) : null;
+                const normalizedTrip = normalizeTripForSave(data, previousTrip);
+                const autoLogs = buildAutoChangeLogs(normalizedTrip, previousTrip);
+                const payload = {
+                    ...normalizedTrip,
+                    changes: [...(normalizedTrip.changes || []), ...autoLogs],
+                    updatedAt: serverTimestamp()
+                };
+                try {
+                    if(id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips_pro', id), payload);
+                    else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'trips_pro'), payload);
+                    setTripModal({ open: false, data: null });
+                } catch (err) { 
+                    console.error("저장 실패:", err);
+                    alert("저장에 실패했습니다.\n\n원인: " + err.message + "\n\nFirebase 연결 상태와 Firestore 보안 규칙을 확인해주세요.");
+                }
+            };
+
+            const deleteItem = async (col, id, documents = []) => {
+                if(confirm('데이터를 영구 삭제하시겠습니까?')) {
+                    try {
+                        await Promise.all(
+                            (documents || [])
+                                .filter(d => d?.storagePath)
+                                .map(d => deleteObject(ref(storage, d.storagePath)).catch(() => null))
+                        );
+                        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', col, id));
+                    } catch(err) {
+                        alert("삭제 실패: " + err.message);
+                    }
+                }
+            };
+
+            const updateTripStatus = async (trip, nextStatus) => {
+                const autoLogs = [
+                    ...(trip.changes || []),
+                    { date: getLocalDateString(), type: '자동기록', note: `상태가 ${getTripStatus(trip).label}에서 ${STATUS_META[nextStatus]?.label || nextStatus}(으)로 변경되었습니다.` }
+                ];
+                const currentHistory = getReticketingHistory(trip);
+                const latestReticketing = getLatestReticketing(trip);
+                const nextReticketing = latestReticketing || trip.originalItinerary ? {
+                    ...(latestReticketing || {}),
+                    status: RETICKETING_FLOW.includes(nextStatus) ? nextStatus : (latestReticketing?.status || ''),
+                    completedAt: nextStatus === 'reticketed' ? (latestReticketing?.completedAt || getLocalDateString()) : (latestReticketing?.completedAt || '')
+                } : null;
+                const nextHistory = nextReticketing
+                    ? [...currentHistory.slice(0, Math.max(currentHistory.length - 1, 0)), nextReticketing]
+                    : currentHistory;
+                try {
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips_pro', trip.id), {
+                        ticketingStatus: nextStatus,
+                        reticketingHistory: nextHistory,
+                        reticketing: nextReticketing,
+                        changes: autoLogs,
+                        updatedAt: serverTimestamp()
+                    });
+                    setTripDetail(prev => prev?.id === trip.id ? { ...prev, ticketingStatus: nextStatus, reticketingHistory: nextHistory, reticketing: nextReticketing, changes: autoLogs } : prev);
+                } catch (err) {
+                    alert("상태 변경 실패: " + err.message);
+                }
+            };
+
+            const STATUS_META = {
+                planned: { label: '계획', color: 'blue', stage: 1 },
+                requested: { label: '발권 요청', color: 'yellow', stage: 2 },
+                reserved: { label: '예약 완료', color: 'blue', stage: 3 },
+                ticketed: { label: '발권 완료', color: 'green', stage: 4 },
+                change_req: { label: '변경 요청', color: 'orange', stage: 5 },
+                rebooking: { label: '재예약 중', color: 'orange', stage: 6 },
+                reticketed: { label: '재발권 완료', color: 'green', stage: 7 },
+                in_trip: { label: '출장 중', color: 'green', stage: 8 },
+                completed: { label: '완료', color: 'gray', stage: 9 },
+                cancelled: { label: '취소', color: 'gray', stage: 10 }
+            };
+
+            const RETICKETING_FLOW = ['change_req', 'rebooking', 'reticketed'];
+            const ISSUED_STATUSES = ['ticketed', 'reticketed', 'in_trip', 'completed', 'change_req', 'rebooking'];
+            const getEmployeeById = (id) => employees.find(e => e.id === id);
+            const getPrimaryDestination = (trip) => trip.segments?.find(seg => seg.arr)?.arr || trip.destination || '미정';
+            const getTripCostTotal = (trip) => {
+                const breakdown = trip.costBreakdown || {};
+                const breakdownSum = ['flight', 'hotel', 'transport', 'daily', 'misc']
+                    .reduce((sum, key) => sum + Number(breakdown[key] || 0), 0);
+                return Number(trip.cost?.actual || breakdownSum || 0);
+            };
+            const getTripCurrency = (trip) => trip.cost?.currency || 'KRW';
+            const getTripStatus = (trip) => STATUS_META[trip.ticketingStatus] || { label: trip.ticketingStatus || '미정', color: 'gray', stage: 99 };
+            const buildItinerarySnapshot = (trip) => ({
+                startDate: trip?.startDate || '',
+                endDate: trip?.endDate || '',
+                ticketNo: trip?.ticketNo || '',
+                segments: (trip?.segments || []).map(({ dep, arr, date, airline, flightNo, pnr }) => ({ dep, arr, date, airline, flightNo, pnr }))
+            });
+            const hasScheduleChanged = (a, b) => !!a && !!b && (a.startDate !== b.startDate || a.endDate !== b.endDate);
+            const getReticketingHistory = (trip) => {
+                if (Array.isArray(trip?.reticketingHistory) && trip.reticketingHistory.length) return trip.reticketingHistory;
+                if (trip?.reticketing) return [trip.reticketing];
+                return [];
+            };
+            const getLatestReticketing = (trip) => {
+                const history = getReticketingHistory(trip);
+                return history.length ? history[history.length - 1] : null;
+            };
+            const hasReticketingFlow = (trip) => !!(trip?.originalItinerary || getReticketingHistory(trip).length || RETICKETING_FLOW.includes(trip?.ticketingStatus));
+            const getQuickNextStatus = (trip) => {
+                const current = trip.ticketingStatus;
+                if (current === 'planned') return 'requested';
+                if (current === 'requested') return 'reserved';
+                if (current === 'reserved') return 'ticketed';
+                if (current === 'ticketed') return 'in_trip';
+                if (current === 'change_req') return 'rebooking';
+                if (current === 'rebooking') return 'reticketed';
+                if (current === 'reticketed') return 'in_trip';
+                if (current === 'in_trip') return 'completed';
+                return 'completed';
+            };
+            const normalizeTripForSave = (tripData, previousTrip) => {
+                const scheduleChangedAfterIssue = previousTrip && ISSUED_STATUSES.includes(previousTrip.ticketingStatus) && hasScheduleChanged(previousTrip, tripData);
+                let ticketingStatus = tripData.ticketingStatus;
+                let originalItinerary = tripData.originalItinerary || previousTrip?.originalItinerary || null;
+                const previousHistory = getReticketingHistory(previousTrip);
+                let reticketingHistory = Array.isArray(tripData.reticketingHistory) ? tripData.reticketingHistory : previousHistory.slice();
+                const incomingReticketing = tripData.reticketing || getLatestReticketing(tripData) || null;
+                const latestHistory = reticketingHistory.length ? reticketingHistory[reticketingHistory.length - 1] : null;
+                const hasOpenCycle = latestHistory && latestHistory.status !== 'reticketed' && latestHistory.status !== 'completed';
+
+                if (scheduleChangedAfterIssue && !originalItinerary) {
+                    originalItinerary = buildItinerarySnapshot(previousTrip);
+                }
+
+                const shouldManageReticketing = !!incomingReticketing || scheduleChangedAfterIssue || RETICKETING_FLOW.includes(ticketingStatus);
+                if (shouldManageReticketing && !originalItinerary && previousTrip && ISSUED_STATUSES.includes(previousTrip.ticketingStatus)) {
+                    originalItinerary = buildItinerarySnapshot(previousTrip);
+                }
+                if (scheduleChangedAfterIssue && !RETICKETING_FLOW.includes(ticketingStatus) && ['ticketed', 'reticketed', 'in_trip'].includes(previousTrip?.ticketingStatus)) {
+                    ticketingStatus = 'change_req';
+                }
+                if (shouldManageReticketing) {
+                    const baseEntry = {
+                        id: latestHistory?.id || `rt-${Date.now()}`,
+                        previousStartDate: incomingReticketing?.previousStartDate || (scheduleChangedAfterIssue && !hasOpenCycle ? previousTrip?.startDate : latestHistory?.previousStartDate) || previousTrip?.startDate || originalItinerary?.startDate || '',
+                        previousEndDate: incomingReticketing?.previousEndDate || (scheduleChangedAfterIssue && !hasOpenCycle ? previousTrip?.endDate : latestHistory?.previousEndDate) || previousTrip?.endDate || originalItinerary?.endDate || '',
+                        requestedStartDate: incomingReticketing?.requestedStartDate || tripData.startDate || '',
+                        requestedEndDate: incomingReticketing?.requestedEndDate || tripData.endDate || '',
+                        requestedAt: incomingReticketing?.requestedAt || latestHistory?.requestedAt || getLocalDateString(),
+                        reason: incomingReticketing?.reason || latestHistory?.reason || (scheduleChangedAfterIssue ? '발권 이후 일정 변경' : '일정 변경 요청'),
+                        extraCost: Number(incomingReticketing?.extraCost ?? latestHistory?.extraCost ?? 0),
+                        note: incomingReticketing?.note || latestHistory?.note || '',
+                        status: RETICKETING_FLOW.includes(ticketingStatus) ? ticketingStatus : (incomingReticketing?.status || latestHistory?.status || ''),
+                        completedAt: ticketingStatus === 'reticketed' ? (incomingReticketing?.completedAt || latestHistory?.completedAt || getLocalDateString()) : (incomingReticketing?.completedAt || latestHistory?.completedAt || '')
+                    };
+                    const shouldAppendNewCycle = scheduleChangedAfterIssue && (!hasOpenCycle || latestHistory?.status === 'reticketed');
+                    if (!reticketingHistory.length || shouldAppendNewCycle) {
+                        reticketingHistory = [...reticketingHistory, baseEntry];
+                    } else {
+                        reticketingHistory = [...reticketingHistory.slice(0, -1), { ...latestHistory, ...baseEntry }];
+                    }
+                }
+
+                if (!hasReticketingFlow({ originalItinerary, reticketingHistory, ticketingStatus })) {
+                    reticketingHistory = [];
+                }
+
+                const reticketing = reticketingHistory.length ? reticketingHistory[reticketingHistory.length - 1] : null;
+
+                return {
+                    ...tripData,
+                    ticketingStatus,
+                    originalItinerary,
+                    reticketingHistory,
+                    reticketing
+                };
+            };
+            const getTripAlerts = (trip) => {
+                const alerts = [];
+                const employee = getEmployeeById(trip.empId);
+                const daysToStart = getDaysRemaining(trip.startDate);
+                const passportDays = getDaysRemaining(employee?.passport?.expiry);
+                const latestReticketing = getLatestReticketing(trip);
+                if (daysToStart <= 3 && daysToStart >= 0 && !trip.ticketNo) alerts.push('출국 임박인데 티켓번호가 없습니다.');
+                if (trip.ticketingStatus === 'change_req') alerts.push('재발권 변경 요청이 접수되었습니다.');
+                if (trip.ticketingStatus === 'rebooking') alerts.push('재예약 진행 중입니다.');
+                if (trip.originalItinerary && trip.originalItinerary.endDate !== trip.endDate) alerts.push(`최초 귀국일 ${trip.originalItinerary.endDate || '-'}에서 ${trip.endDate || '-'}(으)로 변경되었습니다.`);
+                if (getReticketingHistory(trip).length > 1) alerts.push(`누적 일정변경 ${getReticketingHistory(trip).length}회가 기록되어 있습니다.`);
+                if (latestReticketing?.requestedEndDate && latestReticketing.requestedEndDate !== trip.endDate) alerts.push('재발권 요청 일정과 현재 운영 일정이 다릅니다.');
+                if (passportDays < 180) alerts.push('여권 만료가 6개월 이내입니다.');
+                if (trip.endDate && trip.endDate < getLocalDateString() && trip.ticketingStatus !== 'completed' && trip.ticketingStatus !== 'cancelled') alerts.push('귀국일이 지났는데 상태가 완료되지 않았습니다.');
+                if (!trip.documents?.length) alerts.push('첨부 문서가 없습니다.');
+                return alerts;
+            };
+            const getRecentOptions = (field, max = 8) => {
+                const values = trips.map(t => t[field]).filter(Boolean);
+                return [...new Set(values)].slice(-max).reverse();
+            };
+            const getRecentAirports = () => {
+                const codes = trips.flatMap(t => t.segments || []).flatMap(seg => [seg.dep, seg.arr]).filter(Boolean);
+                return [...new Set([...codes.map(code => code.toUpperCase()), ...COMMON_AIRPORT_OPTIONS])].slice(0, 24);
+            };
+            const tripTemplates = React.useMemo(() => {
+                return trips.slice(0, 5).map(t => ({
+                    id: t.id,
+                    label: `${t.project || '프로젝트'} / ${t.purpose || '목적'} / ${getPrimaryDestination(t)}`
+                }));
+            }, [trips]);
+            const getEmployeeName = (trip) => getEmployeeById(trip.empId)?.name || '미지정';
+            const buildAutoChangeLogs = (nextTrip, previousTrip) => {
+                const autoLogs = [];
+                const today = getLocalDateString();
+                if (!previousTrip) {
+                    autoLogs.push({ date: today, type: '자동기록', note: '출장 데이터가 신규 등록되었습니다.' });
+                    return autoLogs;
+                }
+                if (previousTrip.ticketingStatus !== nextTrip.ticketingStatus) autoLogs.push({ date: today, type: '자동기록', note: `상태가 ${getTripStatus(previousTrip).label}에서 ${getTripStatus(nextTrip).label}(으)로 변경되었습니다.` });
+                if (previousTrip.startDate !== nextTrip.startDate || previousTrip.endDate !== nextTrip.endDate) autoLogs.push({ date: today, type: '자동기록', note: `출장 기간이 ${previousTrip.startDate || '-'}~${previousTrip.endDate || '-'} 에서 ${nextTrip.startDate || '-'}~${nextTrip.endDate || '-'} 로 변경되었습니다.` });
+                if (!previousTrip.originalItinerary && nextTrip.originalItinerary) autoLogs.push({ date: today, type: '자동기록', note: `최초 발권 일정 ${nextTrip.originalItinerary.startDate || '-'}~${nextTrip.originalItinerary.endDate || '-'} 이 기준 일정으로 보관되었습니다.` });
+                if (previousTrip.endDate !== nextTrip.endDate && ISSUED_STATUSES.includes(previousTrip.ticketingStatus)) autoLogs.push({ date: today, type: '재발권관리', note: `귀국일 변경 요청이 ${previousTrip.endDate || '-'} 에서 ${nextTrip.endDate || '-'} 로 접수되었습니다.` });
+                const prevLatestReticketing = getLatestReticketing(previousTrip);
+                const nextLatestReticketing = getLatestReticketing(nextTrip);
+                if (getReticketingHistory(nextTrip).length > getReticketingHistory(previousTrip).length) autoLogs.push({ date: today, type: '재발권관리', note: `${getReticketingHistory(nextTrip).length}차 일정 변경/재발권 건이 추가되었습니다.` });
+                if ((prevLatestReticketing?.status || '') !== (nextLatestReticketing?.status || '')) autoLogs.push({ date: today, type: '재발권관리', note: `재발권 상태가 ${(STATUS_META[prevLatestReticketing?.status]?.label || '미정')}에서 ${(STATUS_META[nextLatestReticketing?.status]?.label || '미정')}(으)로 변경되었습니다.` });
+                if (Number(prevLatestReticketing?.extraCost || 0) !== Number(nextLatestReticketing?.extraCost || 0)) autoLogs.push({ date: today, type: '재발권관리', note: `재발권 추가 비용이 ${formatMoney(prevLatestReticketing?.extraCost || 0)}에서 ${formatMoney(nextLatestReticketing?.extraCost || 0)}(으)로 변경되었습니다.` });
+                if ((previousTrip.documents?.length || 0) !== (nextTrip.documents?.length || 0)) autoLogs.push({ date: today, type: '자동기록', note: `첨부 문서 수가 ${(previousTrip.documents?.length || 0)}건에서 ${(nextTrip.documents?.length || 0)}건으로 변경되었습니다.` });
+                if (getTripCostTotal(previousTrip) !== getTripCostTotal(nextTrip)) autoLogs.push({ date: today, type: '자동기록', note: `총 비용이 ${formatMoney(getTripCostTotal(previousTrip))}에서 ${formatMoney(getTripCostTotal(nextTrip))}(으)로 변경되었습니다.` });
+                return autoLogs;
+            };
+
+            // --- Views ---
+
+            const Dashboard = () => {
+                const totalActual = filteredTripsByYear.reduce((acc, t) => acc + getTripCostTotal(t), 0);
+                const activeTrips = trips.filter(t => t.startDate <= getLocalDateString() && t.endDate >= getLocalDateString() && t.ticketingStatus !== 'cancelled');
+                const urgentChanges = trips.filter(t => ['change_req', 'rebooking'].includes(t.ticketingStatus));
+                const warningEmps = employees.filter(e => getDaysRemaining(e.passport?.expiry) < 180);
+                const upcomingTrips = trips.filter(t => {
+                    const days = getDaysRemaining(t.startDate);
+                    return days >= 0 && days <= 7 && t.ticketingStatus !== 'cancelled';
+                });
+                const missingDocs = trips.filter(t => !t.documents?.length && t.ticketingStatus !== 'cancelled');
+                const actionQueues = [
+                    { title: '이번 주 출국', count: upcomingTrips.length, color: 'blue', icon: 'fa-plane-departure', badge: 'blue', iconClass: 'bg-blue-50 text-blue-600', action: () => setView('trips') },
+                    { title: '재발권 필요', count: urgentChanges.length, color: 'orange', icon: 'fa-arrows-rotate', badge: 'orange', iconClass: 'bg-orange-50 text-orange-600', action: () => setView('trips') },
+                    { title: '여권 갱신 필요', count: warningEmps.length, color: 'red', icon: 'fa-passport', badge: 'red', iconClass: 'bg-red-50 text-red-600', action: () => setView('employees') },
+                    { title: '첨부 누락 출장', count: missingDocs.length, color: 'yellow', icon: 'fa-paperclip', badge: 'yellow', iconClass: 'bg-amber-50 text-amber-600', action: () => setView('trips') }
+                ];
+                const monthlyData = filteredTripsByYear.reduce((acc, t) => {
+                    if (!t.startDate) return acc;
+                    const m = t.startDate.split('-')[1];
+                    acc[m] = (acc[m] || 0) + getTripCostTotal(t);
+                    return acc;
+                }, {});
+                const months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+                const maxMonthVal = Math.max(...Object.values(monthlyData), 1);
+                const recentAlerts = filteredTripsByYear
+                    .flatMap(t => getTripAlerts(t).slice(0, 2).map(text => ({ trip: t, text })))
+                    .slice(0, 6);
+
+                return (
+                    <div className="p-6 space-y-6 animate-fade-in max-w-[1600px] mx-auto">
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div className="section-shell p-5 rounded-2xl flex items-center justify-between">
+                                <div><div className="text-xs text-slate-500 font-bold uppercase mb-1">{selectedYear}년 총 지출</div><div className="text-2xl font-bold text-slate-800">₩ {formatMoney(totalActual)}</div></div>
+                                <div className="p-3 bg-blue-50 text-blue-600 rounded-lg"><i className="fas fa-coins text-xl"></i></div>
+                            </div>
+                            <div className="section-shell p-5 rounded-2xl flex items-center justify-between">
+                                <div><div className="text-xs text-slate-500 font-bold uppercase mb-1">현재 해외 체류</div><div className="text-2xl font-bold text-slate-800">{activeTrips.length}명</div></div>
+                                <div className="p-3 bg-green-50 text-green-600 rounded-lg"><i className="fas fa-globe-americas text-xl"></i></div>
+                            </div>
+                            <div className="section-shell p-5 rounded-2xl flex items-center justify-between">
+                                <div><div className="text-xs text-slate-500 font-bold uppercase mb-1">평균 출장비</div><div className="text-2xl font-bold text-slate-800">₩ {formatMoney(filteredTripsByYear.length ? totalActual / filteredTripsByYear.length : 0)}</div></div>
+                                <div className="p-3 bg-violet-50 text-violet-600 rounded-lg"><i className="fas fa-chart-column text-xl"></i></div>
+                            </div>
+                            <div className="section-shell p-5 rounded-2xl flex items-center justify-between">
+                                <div><div className="text-xs text-slate-500 font-bold uppercase mb-1">자동 경고</div><div className="text-2xl font-bold text-red-600">{recentAlerts.length}건</div></div>
+                                <div className="p-3 bg-red-50 text-red-600 rounded-lg"><i className="fas fa-triangle-exclamation text-xl"></i></div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                            {actionQueues.map(queue => (
+                                <button key={queue.title} onClick={queue.action} className="bg-white text-left p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${queue.iconClass}`}><i className={`fas ${queue.icon}`}></i></div>
+                                        <Badge color={queue.badge}>{queue.count}건</Badge>
+                                    </div>
+                                    <div className="font-bold text-slate-800">{queue.title}</div>
+                                    <div className="text-xs text-slate-500 mt-1">클릭해서 관련 화면으로 이동</div>
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div className="lg:col-span-2 section-shell rounded-2xl p-6 flex flex-col">
+                                <div className="flex items-center justify-between mb-6">
+                                    <h3 className="text-lg font-bold text-slate-800 flex items-center"><i className="fas fa-chart-line text-blue-500 mr-2"></i>{selectedYear}년 월별 지출 추이</h3>
+                                    <button onClick={() => setView('trips')} className="text-xs bg-slate-100 px-3 py-1.5 rounded">출장 목록 열기</button>
+                                </div>
+                                <div className="flex-1 flex items-end justify-between space-x-4 px-4 pb-2 relative">
+                                    <div className="absolute inset-0 border-b border-l border-slate-100 -z-10"></div>
+                                    {months.map(month => {
+                                        const val = monthlyData[month] || 0;
+                                        return (
+                                            <div key={month} className="flex flex-col items-center flex-1 group">
+                                                <div className="relative w-full flex justify-center items-end h-[280px]">
+                                                    <div className="w-8 md:w-12 bg-blue-500 rounded-t-sm bar-grow hover:bg-blue-600 transition-colors relative" style={{ height: `${maxMonthVal > 0 ? (val / maxMonthVal) * 80 : 0}%` }}>
+                                                        {val > 0 && <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10 transition-opacity">₩ {formatMoney(val)}</div>}
+                                                    </div>
+                                                </div>
+                                                <div className="mt-3 text-xs font-medium text-slate-500">{month}월</div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                            <div className="section-shell rounded-2xl p-5">
+                                <h3 className="text-sm font-bold text-slate-700 mb-4 uppercase tracking-wide">자동 경고 피드</h3>
+                                <div className="space-y-3">
+                                    {recentAlerts.length === 0 && <div className="text-sm text-slate-400 bg-slate-50 border border-dashed rounded-lg p-4">현재 표시할 경고가 없습니다.</div>}
+                                    {recentAlerts.map((item, idx) => {
+                                        const emp = getEmployeeById(item.trip.empId);
+                                        return (
+                                            <button key={`${item.trip.id}-${idx}`} onClick={() => { setView('trips'); setTripDetail(item.trip); }} className="w-full text-left p-3 rounded-lg border border-orange-100 bg-orange-50 hover:bg-orange-100 transition">
+                                                <div className="text-xs font-bold text-orange-700 mb-1">{emp?.name || '미지정'} / {item.trip.project || '프로젝트 없음'}</div>
+                                                <div className="text-sm text-slate-700">{item.text}</div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const GlobalMap = () => {
+                const activeTrips = trips.filter(t => t.startDate <= getLocalDateString() && t.endDate >= getLocalDateString() && t.ticketingStatus !== 'cancelled');
+                const countrySummary = activeTrips.reduce((acc, trip) => {
+                    const key = getPrimaryDestination(trip);
+                    acc[key] = (acc[key] || 0) + 1;
+                    return acc;
+                }, {});
+                return (
+                    <div className="p-6 h-full flex flex-col animate-fade-in max-w-7xl mx-auto w-full">
+                        <div className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-6 flex-1 min-h-0">
+                            <div className="bg-[#102a43] rounded-xl shadow-lg relative overflow-hidden border border-slate-700 min-h-[520px]">
+                                <div className="absolute top-4 left-4 z-10 bg-white/90 px-4 py-2 rounded-lg text-sm border border-white/60">출장 중 {activeTrips.length}명</div>
+                                <div className="absolute inset-0 bg-[url('https://upload.wikimedia.org/wikipedia/commons/8/80/World_map_-_low_resolution.svg')] bg-cover bg-center opacity-30 mix-blend-overlay"></div>
+                                {activeTrips.map(t => {
+                                    const emp = getEmployeeById(t.empId);
+                                    const dest = getPrimaryDestination(t);
+                                    const coords = getCityCoords(dest);
+                                    return (
+                                        <button key={t.id} onClick={() => { setView('trips'); setTripDetail(t); }} className="absolute map-dot group cursor-pointer" style={{ top: `${coords.top}%`, left: `${coords.left}%` }}>
+                                            <div className="relative">
+                                                <div className="w-3 h-3 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,0.8)] animate-pulse"></div>
+                                                <div className="absolute -top-1 -left-1 w-5 h-5 bg-blue-400 rounded-full opacity-30 animate-ping"></div>
+                                                <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-48 bg-white text-gray-800 text-xs rounded-lg shadow-xl p-3 z-50">
+                                                    <div className="font-bold border-b border-gray-100 pb-1 mb-1">{emp?.name} ({emp?.dept})</div>
+                                                    <div className="text-gray-500">목적지: <span className="font-mono font-bold text-blue-600">{dest}</span></div>
+                                                    <div className="text-gray-400 mt-1">~ {t.endDate} 귀국</div>
+                                                </div>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <div className="section-shell rounded-2xl p-5 overflow-auto space-y-6">
+                                <div>
+                                    <h3 className="font-bold text-slate-800 mb-4">국가별 현황</h3>
+                                    <div className="space-y-3">
+                                        {Object.keys(countrySummary).length === 0 && <div className="text-sm text-slate-400 bg-slate-50 border border-dashed rounded-lg p-4">현재 출장 중인 인원이 없습니다.</div>}
+                                        {Object.entries(countrySummary).sort((a, b) => b[1] - a[1]).map(([country, count]) => (
+                                            <div key={country} className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50">
+                                                <div className="font-medium text-slate-700">{country}</div>
+                                                <Badge color="blue">{count}명</Badge>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-slate-800 mb-4">실시간 출장자</h3>
+                                    <div className="space-y-3">
+                                        {activeTrips.sort((a, b) => (a.endDate || '').localeCompare(b.endDate || '')).map(trip => (
+                                            <button key={trip.id} onClick={() => { setView('trips'); setTripDetail(trip); }} className="w-full text-left p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-slate-100">
+                                                <div className="font-semibold text-slate-800">{getEmployeeName(trip)}</div>
+                                                <div className="text-xs text-slate-500 mt-1">{getPrimaryDestination(trip)} / 귀국 {trip.endDate}</div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const TripDetailDrawer = ({ trip, onClose }) => {
+                if (!trip) return null;
+                const employee = getEmployeeById(trip.empId);
+                const alerts = getTripAlerts(trip);
+                const breakdown = trip.costBreakdown || {};
+                const reticketingHistory = getReticketingHistory(trip);
+                const reticketing = getLatestReticketing(trip);
+                const originalItinerary = trip.originalItinerary || null;
+                const nextWorkflowActions = [
+                    ['requested', '발권 요청으로'],
+                    ['reserved', '예약 완료로'],
+                    ['ticketed', '발권 완료로'],
+                    ['change_req', '변경 요청으로'],
+                    ['rebooking', '재예약 중으로'],
+                    ['reticketed', '재발권 완료로'],
+                    ['in_trip', '출장 중으로'],
+                    ['completed', '완료로']
+                ].filter(([status]) => status !== trip.ticketingStatus);
+                return (
+                    <div className="fixed inset-0 z-40 bg-black/30">
+                        <div className="absolute right-0 top-0 h-full w-full max-w-xl bg-white shadow-2xl border-l border-slate-200 overflow-y-auto">
+                            <div className="sticky top-0 bg-white border-b border-slate-100 p-5 flex items-start justify-between">
+                                <div>
+                                    <div className="flex items-center gap-2 mb-2"><Badge color={getTripStatus(trip).color}>{getTripStatus(trip).label}</Badge><span className="text-xs text-slate-400">{trip.startDate} ~ {trip.endDate}</span></div>
+                                    <h3 className="text-xl font-bold text-slate-900">{trip.project || '프로젝트 미정'}</h3>
+                                    <p className="text-sm text-slate-500">{employee?.name || '출장자 미지정'} / {employee?.dept || '-'}</p>
+                                </div>
+                                <button onClick={onClose} className="text-slate-400 hover:text-slate-700"><i className="fas fa-times text-xl"></i></button>
+                            </div>
+                            <div className="p-5 space-y-6">
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-4"><div className="text-xs text-slate-500 uppercase mb-1">담당 메모</div><div className="font-semibold">{trip.coordinator || '미지정'}</div></div>
+                                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-4"><div className="text-xs text-slate-500 uppercase mb-1">현재 단계</div><div className="font-semibold">{getTripStatus(trip).label}</div></div>
+                                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-4"><div className="text-xs text-slate-500 uppercase mb-1">목적지</div><div className="font-semibold">{getPrimaryDestination(trip)}</div></div>
+                                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-4"><div className="text-xs text-slate-500 uppercase mb-1">총비용</div><div className="font-semibold">{getTripCurrency(trip)} {formatMoney(getTripCostTotal(trip))}</div></div>
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-slate-800 mb-3">흐름 상태 처리</h4>
+                                    <div className="flex flex-wrap gap-2">
+                                        {nextWorkflowActions.map(([status, label]) => <button key={status} onClick={() => updateTripStatus(trip, status)} className="px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm hover:bg-slate-100">{label}</button>)}
+                                    </div>
+                                </div>
+                                {hasReticketingFlow(trip) && (
+                                    <div>
+                                        <h4 className="font-bold text-slate-800 mb-3">재발권 관리</h4>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <div className="bg-orange-50 border border-orange-100 rounded-lg p-4">
+                                                <div className="text-xs text-orange-700 uppercase mb-2 font-bold">최초 발권 일정</div>
+                                                <div className="font-semibold text-slate-800">{originalItinerary?.startDate || '-'} ~ {originalItinerary?.endDate || '-'}</div>
+                                                <div className="text-xs text-slate-500 mt-1">티켓번호 {originalItinerary?.ticketNo || '-'}</div>
+                                            </div>
+                                            <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-4">
+                                                <div className="text-xs text-emerald-700 uppercase mb-2 font-bold">현재 운영 일정</div>
+                                                <div className="font-semibold text-slate-800">{trip.startDate || '-'} ~ {trip.endDate || '-'}</div>
+                                                <div className="text-xs text-slate-500 mt-1">상태 {getTripStatus(trip).label}</div>
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 grid grid-cols-2 gap-3">
+                                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm">
+                                                <div className="text-xs text-slate-500 uppercase mb-1">변경 사유</div>
+                                                <div className="font-medium">{reticketing?.reason || '미입력'}</div>
+                                            </div>
+                                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm">
+                                                <div className="text-xs text-slate-500 uppercase mb-1">추가 비용</div>
+                                                <div className="font-medium">{getTripCurrency(trip)} {formatMoney(reticketing?.extraCost || 0)}</div>
+                                            </div>
+                                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm">
+                                                <div className="text-xs text-slate-500 uppercase mb-1">변경 요청일</div>
+                                                <div className="font-medium">{reticketing?.requestedAt || '-'}</div>
+                                            </div>
+                                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm">
+                                                <div className="text-xs text-slate-500 uppercase mb-1">재발권 완료일</div>
+                                                <div className="font-medium">{reticketing?.completedAt || '-'}</div>
+                                            </div>
+                                        </div>
+                                        {reticketing?.note && <div className="mt-3 bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm text-slate-600">{reticketing.note}</div>}
+                                        <div className="mt-4">
+                                            <div className="text-xs font-bold text-slate-500 uppercase mb-2">다회차 변경 이력</div>
+                                            <div className="space-y-2">
+                                                {reticketingHistory.map((entry, idx) => (
+                                                    <div key={entry.id || idx} className="bg-white border border-slate-200 rounded-lg p-3 text-sm">
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <div className="font-semibold text-slate-800">{idx + 1}차 변경</div>
+                                                            <Badge color={STATUS_META[entry.status]?.color || 'gray'}>{STATUS_META[entry.status]?.label || '기록'}</Badge>
+                                                        </div>
+                                                        <div className="mt-2 text-slate-600">{entry.previousStartDate || '-'} ~ {entry.previousEndDate || '-'} -> {entry.requestedStartDate || '-'} ~ {entry.requestedEndDate || '-'}</div>
+                                                        <div className="mt-1 text-xs text-slate-500">요청일 {entry.requestedAt || '-'} / 추가비용 {getTripCurrency(trip)} {formatMoney(entry.extraCost || 0)}</div>
+                                                        {entry.reason && <div className="mt-1 text-xs text-slate-500">사유: {entry.reason}</div>}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                                <div>
+                                    <h4 className="font-bold text-slate-800 mb-3">자동 경고</h4>
+                                    <div className="space-y-2">
+                                        {alerts.length === 0 && <div className="text-sm text-slate-400 bg-slate-50 border border-dashed rounded-lg p-3">현재 경고가 없습니다.</div>}
+                                        {alerts.map(alert => <div key={alert} className="text-sm bg-orange-50 text-orange-800 border border-orange-100 rounded-lg p-3">{alert}</div>)}
+                                    </div>
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-slate-800 mb-3">비용 상세</h4>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        {[
+                                            ['항공', breakdown.flight],
+                                            ['숙박', breakdown.hotel],
+                                            ['교통', breakdown.transport],
+                                            ['일비', breakdown.daily],
+                                            ['기타', breakdown.misc]
+                                        ].map(([label, value]) => <div key={label} className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm flex justify-between"><span>{label}</span><span className="font-semibold">{formatMoney(value || 0)}</span></div>)}
+                                    </div>
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-slate-800 mb-3">여정</h4>
+                                    <div className="space-y-2">
+                                        {(trip.segments || []).map((seg, idx) => <div key={`${seg.dep}-${seg.arr}-${idx}`} className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm"><div className="font-semibold">{seg.dep} → {seg.arr}</div><div className="text-slate-500">{seg.date} / {seg.airline || '-'} {seg.flightNo || ''}</div></div>)}
+                                    </div>
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-slate-800 mb-3">이력</h4>
+                                    <div className="space-y-2">
+                                        {(trip.changes || []).slice().reverse().map((log, idx) => <div key={`${log.date}-${idx}`} className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm"><div className="font-semibold">{log.date} / {log.type}</div><div className="text-slate-500 mt-1">{log.note}</div></div>)}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const TripManager = () => {
+                const [searchTerm, setSearchTerm] = React.useState("");
+                const [viewMode, setViewMode] = React.useState('list');
+                const [statusFilter, setStatusFilter] = React.useState('all');
+                const [deptFilter, setDeptFilter] = React.useState('all');
+                const [monthFilter, setMonthFilter] = React.useState('all');
+                const [airlineFilter, setAirlineFilter] = React.useState('all');
+                const [sortBy, setSortBy] = React.useState('start_desc');
+                const departments = [...new Set(employees.map(e => e.dept).filter(Boolean))];
+                const airlines = [...new Set(filteredTripsByYear.flatMap(t => t.segments || []).map(seg => seg.airline).filter(Boolean))];
+                const filteredTrips = filteredTripsByYear
+                    .filter(t => {
+                        const employee = getEmployeeById(t.empId);
+                        const searchStr = `${employee?.name || ''} ${employee?.dept || ''} ${t.project || ''} ${t.purpose || ''} ${t.ticketNo || ''} ${getPrimaryDestination(t)}`.toLowerCase();
+                        return searchStr.includes(searchTerm.toLowerCase());
+                    })
+                    .filter(t => statusFilter === 'all' || t.ticketingStatus === statusFilter)
+                    .filter(t => deptFilter === 'all' || getEmployeeById(t.empId)?.dept === deptFilter)
+                    .filter(t => monthFilter === 'all' || t.startDate?.slice(5, 7) === monthFilter)
+                    .filter(t => airlineFilter === 'all' || (t.segments || []).some(seg => seg.airline === airlineFilter))
+                    .sort((a, b) => {
+                        if (sortBy === 'cost_desc') return getTripCostTotal(b) - getTripCostTotal(a);
+                        if (sortBy === 'cost_asc') return getTripCostTotal(a) - getTripCostTotal(b);
+                        if (sortBy === 'changes_desc') return (b.changes?.length || 0) - (a.changes?.length || 0);
+                        if (sortBy === 'end_asc') return (a.endDate || '').localeCompare(b.endDate || '');
+                        return (b.startDate || '').localeCompare(a.startDate || '');
+                    });
+
+                const exportTrips = (mode) => {
+                    let exportSet = filteredTrips;
+                    let filename = `출장리스트_${selectedYear}.csv`;
+                    if (mode === 'alerts') {
+                        exportSet = filteredTrips.filter(t => getTripAlerts(t).length > 0);
+                        filename = `출장경고_${selectedYear}.csv`;
+                    }
+                    if (mode === 'passport') {
+                        const expiringEmpIds = new Set(employees.filter(e => getDaysRemaining(e.passport?.expiry) < 180).map(e => e.id));
+                        exportSet = filteredTrips.filter(t => expiringEmpIds.has(t.empId));
+                        filename = `여권만료연계출장_${selectedYear}.csv`;
+                    }
+                    const headers = ["이름", "부서", "프로젝트", "목적", "시작일", "종료일", "최초귀국일", "변경사유", "추가비용", "실비용", "상태", "티켓번호", "담당메모", "경고"];
+                    const rows = exportSet.map(t => {
+                        const emp = getEmployeeById(t.empId);
+                        return [emp?.name || "", emp?.dept || "", t.project || "", t.purpose || "", t.startDate || "", t.endDate || "", t.originalItinerary?.endDate || "", t.reticketing?.reason || "", t.reticketing?.extraCost || 0, getTripCostTotal(t), getTripStatus(t).label, t.ticketNo || "", t.coordinator || "", getTripAlerts(t).join(' / ')];
+                    });
+                    downloadCSV([headers, ...rows], filename);
+                };
+
+                const handleExport = () => {
+                    const headers = ["이름", "부서", "프로젝트", "목적", "시작일", "종료일", "최초귀국일", "변경사유", "추가비용", "실비용", "상태", "티켓번호", "담당메모"];
+                    const rows = filteredTrips.map(t => {
+                        const emp = getEmployeeById(t.empId);
+                        return [emp?.name || "", emp?.dept || "", t.project || "", t.purpose || "", t.startDate || "", t.endDate || "", t.originalItinerary?.endDate || "", t.reticketing?.reason || "", t.reticketing?.extraCost || 0, getTripCostTotal(t), getTripStatus(t).label, t.ticketNo || "", t.coordinator || ""];
+                    });
+                    downloadCSV([headers, ...rows], `출장리스트_${selectedYear}.csv`);
+                };
+
+                const statusColumns = ['planned', 'requested', 'reserved', 'ticketed', 'change_req', 'rebooking', 'reticketed', 'in_trip', 'completed'];
+                const monthStart = new Date(selectedYear, new Date().getMonth(), 1);
+                const monthLabel = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}`;
+                const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
+
+                return (
+                    <div className={`p-6 h-full flex flex-col animate-fade-in max-w-[1500px] mx-auto w-full gap-4 ${densityMode === 'compact' ? 'text-[13px]' : ''}`}>
+                        <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4">
+                            <div>
+                                <h2 className="text-2xl font-bold text-gray-800">출장 및 항공권 관리</h2>
+                                <p className="text-sm text-gray-500">작업함, 캘린더, 상세 패널 중심으로 업무를 처리할 수 있습니다. 캘린더 탭에서 월간 출국 일정을 확인할 수 있습니다.</p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                <button onClick={handleExport} className="bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700 shadow-sm text-sm"><i className="fas fa-file-export mr-2"></i>엑셀 다운로드</button>
+                                <button onClick={() => exportTrips('alerts')} className="bg-white border border-slate-200 px-3 py-2 rounded-lg hover:bg-slate-50 shadow-sm text-sm">경고 리포트</button>
+                                <button onClick={() => exportTrips('passport')} className="bg-white border border-slate-200 px-3 py-2 rounded-lg hover:bg-slate-50 shadow-sm text-sm">여권 리포트</button>
+                                <button onClick={() => setTripModal({ open: true, data: null })} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 shadow-sm text-sm"><i className="fas fa-plus mr-2"></i>신규 기안</button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            {[
+                                ['이번 주 출국', trips.filter(t => { const d = getDaysRemaining(t.startDate); return d >= 0 && d <= 7; }).length],
+                                ['재발권 필요', trips.filter(t => ['change_req', 'rebooking'].includes(t.ticketingStatus)).length],
+                                ['첨부 누락', trips.filter(t => !t.documents?.length && t.ticketingStatus !== 'cancelled').length],
+                                ['완료 미처리', trips.filter(t => t.endDate < getLocalDateString() && !['completed', 'cancelled'].includes(t.ticketingStatus)).length]
+                            ].map(([label, count]) => <div key={label} className="section-shell rounded-2xl p-4"><div className="text-xs text-slate-500 uppercase">{label}</div><div className="text-2xl font-bold text-slate-800 mt-1">{count}</div></div>)}
+                        </div>
+
+                        <div className="section-shell rounded-2xl p-4 space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
+                                <div className="relative xl:col-span-2"><i className="fas fa-search absolute left-3 top-3 text-slate-400 text-sm"></i><input type="text" placeholder="이름, 부서, 프로젝트, 티켓번호, 목적지 검색" className="pl-9 pr-4 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none w-full" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} /></div>
+                                <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="border rounded-lg px-3 py-2.5 text-sm"><option value="all">전체 상태</option>{Object.entries(STATUS_META).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select>
+                                <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)} className="border rounded-lg px-3 py-2.5 text-sm"><option value="all">전체 부서</option>{departments.map(dept => <option key={dept} value={dept}>{dept}</option>)}</select>
+                                <select value={monthFilter} onChange={e => setMonthFilter(e.target.value)} className="border rounded-lg px-3 py-2.5 text-sm"><option value="all">전체 월</option>{['01','02','03','04','05','06','07','08','09','10','11','12'].map(month => <option key={month} value={month}>{month}월</option>)}</select>
+                                <select value={airlineFilter} onChange={e => setAirlineFilter(e.target.value)} className="border rounded-lg px-3 py-2.5 text-sm"><option value="all">전체 항공사</option>{airlines.map(airline => <option key={airline} value={airline}>{airline}</option>)}</select>
+                            </div>
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                <div className="flex gap-2">
+                                    {['list','board','calendar'].map(mode => <button key={mode} onClick={() => setViewMode(mode)} className={`px-3 py-1.5 rounded-lg text-sm border ${viewMode === mode ? 'bg-slate-800 text-white border-slate-800' : 'bg-white border-slate-200'}`}>{mode === 'list' ? '리스트' : mode === 'board' ? '작업 보드' : '캘린더'}</button>)}
+                                </div>
+                                <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="border rounded-lg px-3 py-2 text-sm">
+                                    <option value="start_desc">출국일 최신순</option>
+                                    <option value="end_asc">귀국일 빠른순</option>
+                                    <option value="cost_desc">비용 높은순</option>
+                                    <option value="cost_asc">비용 낮은순</option>
+                                    <option value="changes_desc">변경 많은순</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        {filteredTrips.length === 0 && <div className="bg-white border border-dashed border-slate-300 rounded-xl p-10 text-center text-slate-500">조건에 맞는 출장 데이터가 없습니다. 필터를 줄이거나 신규 기안을 등록하세요.</div>}
+
+                        {viewMode === 'list' && filteredTrips.length > 0 && (
+                            <div className="section-shell rounded-2xl flex-1 overflow-hidden flex flex-col min-h-0">
+                                <div className="overflow-auto flex-1">
+                                    <table className="w-full text-sm text-left whitespace-nowrap">
+                                        <thead className="bg-gray-50 text-gray-600 sticky top-0 z-10">
+                                            <tr><th className="px-4 py-3 border-b">상태</th><th className="px-4 py-3 border-b">출장자/부서</th><th className="px-4 py-3 border-b">기간</th><th className="px-4 py-3 border-b">목적지/담당</th><th className="px-4 py-3 border-b text-right">비용</th><th className="px-4 py-3 border-b">경고</th><th className="px-4 py-3 border-b text-center">관리</th></tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {filteredTrips.map(t => {
+                                                const emp = getEmployeeById(t.empId);
+                                                const alerts = getTripAlerts(t);
+                                                return (
+                                                    <tr key={t.id} className="hover:bg-gray-50">
+                                                        <td className="px-4 py-3"><Badge color={getTripStatus(t).color}>{getTripStatus(t).label}</Badge></td>
+                                                        <td className="px-4 py-3"><div className="font-bold">{emp?.name}</div><div className="text-xs text-gray-500">{emp?.dept}</div></td>
+                                                        <td className="px-4 py-3"><div>{t.startDate} ~ {t.endDate}</div><div className="text-xs text-slate-500">{t.originalItinerary?.endDate && t.originalItinerary.endDate !== t.endDate ? `최초 귀국 ${t.originalItinerary.endDate}` : t.purpose}</div></td>
+                                                        <td className="px-4 py-3"><div className="font-semibold">{getPrimaryDestination(t)}</div><div className="text-xs text-slate-500">메모 {t.coordinator || '-'}</div></td>
+                                                        <td className="px-4 py-3 text-right font-bold text-blue-900">{getTripCurrency(t)} {formatMoney(getTripCostTotal(t))}</td>
+                                                        <td className="px-4 py-3"><div className="flex flex-wrap gap-1 max-w-[240px]">{alerts.length ? alerts.slice(0, 2).map(alert => <span key={alert} className="px-2 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-100 text-xxs">{alert}</span>) : <span className="text-xs text-slate-400">정상</span>}</div></td>
+                                                        <td className="px-4 py-3 text-center">
+                                                            <button onClick={() => setTripDetail(t)} className="text-slate-600 p-1 mr-2 hover:bg-slate-100 rounded"><i className="fas fa-eye"></i></button>
+                                                            {t.ticketingStatus !== 'completed' && <button onClick={() => updateTripStatus(t, getQuickNextStatus(t))} className="text-emerald-600 p-1 mr-2 hover:bg-emerald-50 rounded"><i className="fas fa-check"></i></button>}
+                                                            <button onClick={() => setTripModal({open:true, data:t})} className="text-blue-600 p-1 mr-2 hover:bg-blue-50 rounded"><i className="fas fa-edit"></i></button>
+                                                            <button onClick={() => deleteItem('trips_pro', t.id, t.documents)} className="text-gray-400 hover:text-red-600 p-1 hover:bg-red-50 rounded"><i className="fas fa-trash"></i></button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {viewMode === 'board' && filteredTrips.length > 0 && (
+                            <div className="grid grid-cols-1 xl:grid-cols-9 gap-4 overflow-auto">
+                                {statusColumns.map(status => (
+                                    <div key={status} className="section-shell rounded-2xl p-4 min-h-[480px]">
+                                        <div className="flex items-center justify-between mb-4"><div className="font-bold text-slate-800">{STATUS_META[status].label}</div><Badge color={STATUS_META[status].color}>{filteredTrips.filter(t => t.ticketingStatus === status).length}</Badge></div>
+                                        <div className="space-y-3">
+                                            {filteredTrips.filter(t => t.ticketingStatus === status).map(t => {
+                                                const emp = getEmployeeById(t.empId);
+                                                return (
+                                                    <button key={t.id} onClick={() => setTripDetail(t)} className="w-full text-left p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-slate-100 transition">
+                                                        <div className="font-semibold text-slate-800">{emp?.name || '미지정'}</div>
+                                                        <div className="text-xs text-slate-500 mt-1">{t.project}</div>
+                                                        <div className="text-xs text-slate-500">{t.startDate}</div>
+                                                        <div className="mt-2 text-xxs text-orange-700">{getTripAlerts(t).slice(0, 1)[0] || '정상 진행 중'}</div>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {viewMode === 'calendar' && filteredTrips.length > 0 && (
+                            <div className="section-shell rounded-2xl p-5 overflow-auto">
+                                <div className="flex items-center justify-between mb-4">
+                                    <h3 className="font-bold text-slate-800">{monthLabel} 캘린더</h3>
+                                    <div className="text-xs text-slate-500">출국일 기준 표시</div>
+                                </div>
+                                <div className="grid grid-cols-7 gap-2 text-xs mb-2 text-slate-500">{['일','월','화','수','목','금','토'].map(day => <div key={day} className="font-bold p-2">{day}</div>)}</div>
+                                <div className="grid grid-cols-7 gap-2">
+                                    {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(day => {
+                                        const dateKey = `${selectedYear}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                                        const dayTrips = filteredTrips.filter(t => t.startDate === dateKey);
+                                        return (
+                                            <div key={day} className="min-h-[120px] border border-slate-200 rounded-lg p-2 bg-slate-50">
+                                                <div className="font-bold text-slate-700 mb-2">{day}</div>
+                                                <div className="space-y-1">
+                                                    {dayTrips.map(t => {
+                                                        const emp = getEmployeeById(t.empId);
+                                                        return <button key={t.id} onClick={() => setTripDetail(t)} className="w-full text-left text-xxs px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-100 truncate">{emp?.name} · {getPrimaryDestination(t)}</button>;
+                                                    })}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {tripDetail && <TripDetailDrawer trip={tripDetail} onClose={() => setTripDetail(null)} />}
+                    </div>
+                );
+            };
+
+            const EmployeeManager = () => {
+                const [searchTerm, setSearchTerm] = React.useState("");
+                const filteredEmps = employees.filter(e => `${e.name} ${e.dept} ${e.passport?.number}`.toLowerCase().includes(searchTerm.toLowerCase()));
+                const expiredCount = employees.filter(e => getDaysRemaining(e.passport?.expiry) < 0).length;
+                const warningCount = employees.filter(e => {
+                    const days = getDaysRemaining(e.passport?.expiry);
+                    return days >= 0 && days < 180;
+                }).length;
+                return (
+                    <div className="p-6 h-full flex flex-col animate-fade-in max-w-7xl mx-auto w-full gap-4">
+                        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+                            <div><h2 className="text-2xl font-bold text-gray-800">임직원 여권/비자 관리</h2><p className="text-sm text-gray-500">갱신 대상자와 보유 비자 현황을 한 번에 확인합니다.</p></div>
+                            <div className="flex gap-3">
+                                <div className="relative"><i className="fas fa-search absolute left-3 top-2.5 text-slate-400 text-sm"></i><input type="text" placeholder="이름, 부서, 여권번호 검색" className="pl-9 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none w-64" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} /></div>
+                                <button onClick={() => openEmployeeModal(null)} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 shadow-sm flex items-center transition"><i className="fas fa-user-plus mr-2"></i> 임직원 등록</button>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="section-shell rounded-2xl p-4"><div className="text-xs text-slate-500 uppercase">전체 인원</div><div className="text-2xl font-bold text-slate-800">{employees.length}</div></div>
+                            <div className="rounded-2xl p-4 border border-orange-200/70 bg-orange-50/80 backdrop-blur-md shadow-[var(--shadow-card)]"><div className="text-xs text-orange-600 uppercase">6개월 이내 만료</div><div className="text-2xl font-bold text-orange-700">{warningCount}</div></div>
+                            <div className="rounded-2xl p-4 border border-red-200/70 bg-rose-50/80 backdrop-blur-md shadow-[var(--shadow-card)]"><div className="text-xs text-red-600 uppercase">만료됨</div><div className="text-2xl font-bold text-red-700">{expiredCount}</div></div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 overflow-y-auto pb-10">
+                            {filteredEmps.length === 0 && <div className="col-span-full bg-white border border-dashed border-slate-300 rounded-xl p-10 text-center text-slate-500">직원이 없습니다. 첫 임직원을 등록해 주세요.</div>}
+                            {filteredEmps.map(emp => {
+                                const daysLeft = getDaysRemaining(emp.passport?.expiry);
+                                const ppStatus = daysLeft < 0 ? 'expired' : daysLeft < 180 ? 'warning' : 'ok';
+                                return (
+                                    <div key={emp.id} className="section-shell rounded-2xl p-5 hover:shadow-lg transition-all relative overflow-hidden group">
+                                        <div className="flex items-start justify-between mb-4">
+                                            <div className="flex items-center"><div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold mr-4 text-lg border border-slate-200">{emp.name[0]}</div><div><h3 className="font-bold text-gray-900 text-lg">{emp.name}</h3><p className="text-xs text-gray-500">{emp.dept} / {emp.position}</p></div></div>
+                                            <button onClick={() => openEmployeeModal(emp)} className="text-gray-400 hover:text-blue-600 p-2 hover:bg-blue-50 rounded-full transition"><i className="fas fa-cog"></i></button>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2 mb-3 text-xs text-slate-500">
+                                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-2">영문명: <span className="text-slate-700 font-medium">{emp.profile?.englishName || '-'}</span></div>
+                                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-2">국적: <span className="text-slate-700 font-medium">{emp.profile?.nationality || emp.passport?.country || '-'}</span></div>
+                                        </div>
+                                        <div className={`rounded-lg p-3 mb-3 border relative overflow-hidden ${ppStatus === 'expired' ? 'bg-red-50 border-red-200' : ppStatus === 'warning' ? 'bg-orange-50 border-orange-200' : 'bg-slate-50 border-slate-200'}`}>
+                                            {ppStatus !== 'ok' && <div className={`absolute top-0 right-0 text-xxs px-2 py-0.5 rounded-bl font-bold ${ppStatus === 'expired' ? 'bg-red-200 text-red-800' : 'bg-orange-200 text-orange-800'}`}>{ppStatus === 'expired' ? '만료' : '갱신 필요'}</div>}
+                                            <div className="flex justify-between items-end"><div><div className="text-xxs text-gray-500 uppercase tracking-wide">여권 번호</div><div className="font-mono font-bold text-gray-800">{emp.passport?.number || '-'}</div></div><div className="text-right"><div className="text-xxs text-gray-500 uppercase tracking-wide">만료일</div><div className={`font-mono font-bold ${ppStatus !== 'ok' ? 'text-red-600' : 'text-gray-800'}`}>{emp.passport?.expiry || '-'}</div></div></div>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">보유 비자</div>
+                                            {emp.visas && emp.visas.length > 0 ? emp.visas.map((v, idx) => <div key={idx} className="flex justify-between items-center text-xs bg-gray-50 p-2 rounded border border-gray-100"><div className="flex items-center"><span className="font-medium text-gray-700 mr-2">{v.country}</span><span className="text-gray-500 text-xxs bg-white border px-1 rounded">{v.type}</span></div><span className="font-mono text-gray-600">{v.expiry}</span></div>) : <div className="text-xs text-gray-300 italic py-1">비자 정보 없음</div>}
+                                        </div>
+                                        <div className="mt-3 text-xs text-slate-500">긴급연락처: {emp.profile?.emergencyContact || '-'}</div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                );
+            };
+
+            const WorkQueue = () => {
+                const queueGroups = [
+                    {
+                        title: '오늘/이번 주 처리',
+                        items: trips.filter(t => {
+                            const d = getDaysRemaining(t.startDate);
+                            return d >= 0 && d <= 7 && t.ticketingStatus !== 'cancelled';
+                        }),
+                        empty: '이번 주 출국 예정이 없습니다.'
+                    },
+                    {
+                        title: '재발권 처리',
+                        items: trips.filter(t => ['change_req', 'rebooking'].includes(t.ticketingStatus)),
+                        empty: '재발권 처리 건이 없습니다.'
+                    },
+                    {
+                        title: '첨부 누락',
+                        items: trips.filter(t => !t.documents?.length && t.ticketingStatus !== 'cancelled'),
+                        empty: '첨부 누락 건이 없습니다.'
+                    },
+                    {
+                        title: '완료 미처리',
+                        items: trips.filter(t => t.endDate < getLocalDateString() && !['completed', 'cancelled'].includes(t.ticketingStatus)),
+                        empty: '완료 미처리 건이 없습니다.'
+                    }
+                ];
+
+                return (
+                    <div className="p-6 space-y-6 animate-fade-in max-w-[1500px] mx-auto">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800">작업함</h2>
+                            <p className="text-sm text-slate-500">1인 운영 기준으로 지금 바로 처리해야 할 항목만 모았습니다.</p>
+                        </div>
+                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                            {queueGroups.map(group => (
+                                <div key={group.title} className="section-shell rounded-2xl p-5">
+                                    <div className="flex items-center justify-between mb-4">
+                                        <h3 className="font-bold text-slate-800">{group.title}</h3>
+                                        <Badge color={group.items.length ? 'orange' : 'gray'}>{group.items.length}건</Badge>
+                                    </div>
+                                    <div className="space-y-3">
+                                        {group.items.length === 0 && <div className="text-sm text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-lg p-4">{group.empty}</div>}
+                                        {group.items.map(trip => (
+                                            <button key={trip.id} onClick={() => { setView('trips'); setTripDetail(trip); }} className="w-full text-left p-4 rounded-lg border border-slate-100 bg-slate-50 hover:bg-slate-100 transition">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div>
+                                                        <div className="font-semibold text-slate-800">{getEmployeeName(trip)} / {trip.project || '프로젝트 미정'}</div>
+                                                        <div className="text-xs text-slate-500 mt-1">{trip.startDate} ~ {trip.endDate} / {getPrimaryDestination(trip)}</div>
+                                                        {trip.originalItinerary?.endDate && trip.originalItinerary.endDate !== trip.endDate && <div className="text-xxs text-orange-700 mt-1">최초 귀국 {trip.originalItinerary.endDate} -> 현재 {trip.endDate}</div>}
+                                                    </div>
+                                                    <Badge color={getTripStatus(trip).color}>{getTripStatus(trip).label}</Badge>
+                                                </div>
+                                                <div className="mt-2 text-xs text-orange-700">{getTripAlerts(trip).slice(0, 2).join(' / ') || '즉시 확인 필요'}</div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            };
+
+            const ReportsView = () => {
+                const yearTrips = filteredTripsByYear;
+                const totalCost = yearTrips.reduce((sum, trip) => sum + getTripCostTotal(trip), 0);
+                const byDept = employees.reduce((acc, emp) => {
+                    acc[emp.dept || '미지정'] = yearTrips.filter(t => t.empId === emp.id).reduce((sum, t) => sum + getTripCostTotal(t), 0) + (acc[emp.dept || '미지정'] || 0);
+                    return acc;
+                }, {});
+                const topDepts = Object.entries(byDept).sort((a, b) => b[1] - a[1]).slice(0, 5);
+                const runExport = (mode) => {
+                    if (mode === 'all') {
+                        const headers = ["이름", "부서", "프로젝트", "목적", "시작일", "종료일", "실비용", "상태", "티켓번호", "담당메모"];
+                        const rows = yearTrips.map(t => {
+                            const emp = getEmployeeById(t.empId);
+                            return [emp?.name || "", emp?.dept || "", t.project || "", t.purpose || "", t.startDate || "", t.endDate || "", getTripCostTotal(t), getTripStatus(t).label, t.ticketNo || "", t.coordinator || ""];
+                        });
+                        return downloadCSV([headers, ...rows], `출장전체리포트_${selectedYear}.csv`);
+                    }
+                    if (mode === 'alerts') {
+                        const headers = ["이름", "프로젝트", "상태", "경고"];
+                        const rows = yearTrips.filter(t => getTripAlerts(t).length).map(t => [getEmployeeName(t), t.project || "", getTripStatus(t).label, getTripAlerts(t).join(' / ')]);
+                        return downloadCSV([headers, ...rows], `출장경고리포트_${selectedYear}.csv`);
+                    }
+                    const headers = ["부서", "총비용"];
+                    const rows = topDepts.map(([dept, cost]) => [dept, cost]);
+                    return downloadCSV([headers, ...rows], `부서별비용_${selectedYear}.csv`);
+                };
+
+                return (
+                    <div className="p-6 space-y-6 animate-fade-in max-w-[1400px] mx-auto">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800">리포트</h2>
+                            <p className="text-sm text-slate-500">{selectedYear}년 기준 요약과 다운로드를 한 곳에서 관리합니다.</p>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="section-shell rounded-2xl p-5"><div className="text-xs uppercase text-slate-500">총 출장 건수</div><div className="text-3xl font-bold text-slate-800 mt-1">{yearTrips.length}</div></div>
+                            <div className="section-shell rounded-2xl p-5"><div className="text-xs uppercase text-slate-500">총 비용</div><div className="text-3xl font-bold text-slate-800 mt-1">₩ {formatMoney(totalCost)}</div></div>
+                            <div className="rounded-2xl p-5 border border-red-200/70 bg-rose-50/80 backdrop-blur-md shadow-[var(--shadow-card)]"><div className="text-xs uppercase text-slate-500">경고 건수</div><div className="text-3xl font-bold text-red-600 mt-1">{yearTrips.filter(t => getTripAlerts(t).length).length}</div></div>
+                        </div>
+                        <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-6">
+                            <div className="section-shell rounded-2xl p-5">
+                                <h3 className="font-bold text-slate-800 mb-4">부서별 비용 상위</h3>
+                                <div className="space-y-3">
+                                    {topDepts.map(([dept, cost]) => (
+                                        <div key={dept} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                                            <div className="font-medium text-slate-700">{dept}</div>
+                                            <div className="font-semibold text-slate-900">₩ {formatMoney(cost)}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="section-shell rounded-2xl p-5 space-y-3">
+                                <h3 className="font-bold text-slate-800">다운로드</h3>
+                                <button onClick={() => runExport('all')} className="w-full text-left p-3 rounded-lg border border-slate-200 hover:bg-slate-50">전체 출장 리포트 CSV</button>
+                                <button onClick={() => runExport('alerts')} className="w-full text-left p-3 rounded-lg border border-slate-200 hover:bg-slate-50">경고 리포트 CSV</button>
+                                <button onClick={() => runExport('dept')} className="w-full text-left p-3 rounded-lg border border-slate-200 hover:bg-slate-50">부서별 비용 CSV</button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const SettingsView = () => {
+                const [settingsDraft, setSettingsDraft] = React.useState({
+                    defaultCurrency: appSettings.defaultCurrency || 'KRW',
+                    defaultAirport: appSettings.defaultAirport || 'ICN',
+                    defaultDepartment: appSettings.defaultDepartment || '',
+                    operatorName: appSettings.operatorName || '관리자'
+                });
+                const [savedTemplates, setSavedTemplates] = React.useState(() => {
+                    try { return JSON.parse(localStorage.getItem('travel_custom_templates') || '[]'); }
+                    catch { return []; }
+                });
+
+                const saveSettings = () => {
+                    setAppSettings(settingsDraft);
+                    alert('설정을 저장했습니다.');
+                };
+
+                const removeTemplate = (id) => {
+                    const next = savedTemplates.filter(t => t.id !== id);
+                    setSavedTemplates(next);
+                    localStorage.setItem('travel_custom_templates', JSON.stringify(next));
+                };
+
+                return (
+                    <div className="p-6 space-y-6 animate-fade-in max-w-[1200px] mx-auto">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800">설정</h2>
+                            <p className="text-sm text-slate-500">1인 운영에 맞는 기본값과 저장된 템플릿을 관리합니다.</p>
+                        </div>
+                        <div className="grid grid-cols-1 xl:grid-cols-[1fr_1fr] gap-6">
+                            <div className="section-shell rounded-2xl p-5 space-y-4">
+                                <h3 className="font-bold text-slate-800">기본값</h3>
+                                <div><label className="text-xs font-bold text-slate-500 uppercase">기본 통화</label><select value={settingsDraft.defaultCurrency} onChange={e => setSettingsDraft(prev => ({ ...prev, defaultCurrency: e.target.value }))} className="w-full border rounded-lg p-2 mt-1"><option value="KRW">KRW</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="JPY">JPY</option><option value="CNY">CNY</option></select></div>
+                                <div><label className="text-xs font-bold text-slate-500 uppercase">기본 출발 공항</label><input value={settingsDraft.defaultAirport} onChange={e => setSettingsDraft(prev => ({ ...prev, defaultAirport: e.target.value.toUpperCase() }))} className="w-full border rounded-lg p-2 mt-1" /></div>
+                                <div><label className="text-xs font-bold text-slate-500 uppercase">기본 부서</label><input value={settingsDraft.defaultDepartment} onChange={e => setSettingsDraft(prev => ({ ...prev, defaultDepartment: e.target.value }))} className="w-full border rounded-lg p-2 mt-1" /></div>
+                                <div><label className="text-xs font-bold text-slate-500 uppercase">운영자 이름</label><input value={settingsDraft.operatorName} onChange={e => setSettingsDraft(prev => ({ ...prev, operatorName: e.target.value }))} className="w-full border rounded-lg p-2 mt-1" /></div>
+                                <button onClick={saveSettings} className="bg-blue-600 text-white px-4 py-2 rounded-lg">설정 저장</button>
+                            </div>
+                            <div className="section-shell rounded-2xl p-5 space-y-4">
+                                <h3 className="font-bold text-slate-800">저장된 템플릿</h3>
+                                <div className="space-y-3">
+                                    {savedTemplates.length === 0 && <div className="text-sm text-slate-400 bg-slate-50 border border-dashed rounded-lg p-4">저장된 개인 템플릿이 없습니다.</div>}
+                                    {savedTemplates.map(template => (
+                                        <div key={template.id} className="flex items-center justify-between gap-3 p-3 rounded-lg border border-slate-100 bg-slate-50">
+                                            <div>
+                                                <div className="font-medium text-slate-800">{template.label}</div>
+                                                <div className="text-xs text-slate-500 mt-1">{template.project || '-'} / {template.purpose || '-'}</div>
+                                            </div>
+                                            <button onClick={() => removeTemplate(template.id)} className="text-red-500 hover:text-red-700"><i className="fas fa-trash"></i></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const TripFormModal = ({ onClose, onSave, data, employees }) => {
+                const [step, setStep] = React.useState(0);
+                const latestReticketing = getLatestReticketing(data);
+                const [customTemplates, setCustomTemplates] = React.useState(() => {
+                    try { return JSON.parse(localStorage.getItem('travel_custom_templates') || '[]'); }
+                    catch { return []; }
+                });
+                const [formState, setFormState] = React.useState({
+                    empId: data?.empId || '',
+                    project: data?.project || '',
+                    purpose: data?.purpose || '',
+                    requester: data?.requester || '',
+                    coordinator: data?.coordinator || '',
+                    startDate: data?.startDate || '',
+                    endDate: data?.endDate || '',
+                    ticketingStatus: data?.ticketingStatus || 'planned',
+                    ticketNo: data?.ticketNo || '',
+                    currency: data?.cost?.currency || 'KRW',
+                    costBreakdown: {
+                        flight: Number(data?.costBreakdown?.flight || 0),
+                        hotel: Number(data?.costBreakdown?.hotel || 0),
+                        transport: Number(data?.costBreakdown?.transport || 0),
+                        daily: Number(data?.costBreakdown?.daily || 0),
+                        misc: Number(data?.costBreakdown?.misc || 0)
+                    },
+                    reticketing: {
+                        enabled: hasReticketingFlow(data || {}),
+                        reason: latestReticketing?.reason || '',
+                        requestedAt: latestReticketing?.requestedAt || '',
+                        previousStartDate: latestReticketing?.previousStartDate || data?.originalItinerary?.startDate || '',
+                        previousEndDate: latestReticketing?.previousEndDate || data?.originalItinerary?.endDate || '',
+                        requestedStartDate: latestReticketing?.requestedStartDate || data?.startDate || '',
+                        requestedEndDate: latestReticketing?.requestedEndDate || data?.endDate || '',
+                        extraCost: Number(latestReticketing?.extraCost || 0),
+                        completedAt: latestReticketing?.completedAt || '',
+                        note: latestReticketing?.note || ''
+                    },
+                    originalItinerary: data?.originalItinerary || null
+                });
+                const [segments, setSegments] = React.useState(data?.segments?.map(s => ({...s, id: Math.random().toString(36).slice(2)})) || [{ id: 'init', dep: '', arr: '', date: '', airline: '', flightNo: '', pnr: '' }]);
+                const [changeLogs, setChangeLogs] = React.useState(data?.changes || []);
+                const [documents, setDocuments] = React.useState(data?.documents || []);
+                const [removedDocuments, setRemovedDocuments] = React.useState([]);
+                const [newChange, setNewChange] = React.useState({date: '', type: '일정변경', note: ''});
+                const costTotal = ['flight', 'hotel', 'transport', 'daily', 'misc'].reduce((sum, key) => sum + Number(formState.costBreakdown[key] || 0), 0);
+                const stepTitles = ['기본정보', '여정/비용', '문서/검토'];
+
+                const patchForm = (key, value) => setFormState(prev => ({ ...prev, [key]: value }));
+                const patchCost = (key, value) => setFormState(prev => ({ ...prev, costBreakdown: { ...prev.costBreakdown, [key]: Number(value || 0) } }));
+                const patchReticketing = (key, value) => setFormState(prev => ({ ...prev, reticketing: { ...prev.reticketing, [key]: value } }));
+                const updateSegment = (id, field, value) => setSegments(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
+                const addSeg = () => setSegments(prev => [...prev, { id: Math.random().toString(36).slice(2), dep: '', arr: '', date: '', airline: '', flightNo: '', pnr: '' }]);
+                const removeSeg = (id) => setSegments(prev => prev.filter(s => s.id !== id));
+                const removeDocument = (docItem) => {
+                    setDocuments(prev => prev.filter(x => x.id !== docItem.id));
+                    if (docItem.storagePath) setRemovedDocuments(prev => [...prev, docItem]);
+                };
+                React.useEffect(() => {
+                    localStorage.setItem('travel_custom_templates', JSON.stringify(customTemplates));
+                }, [customTemplates]);
+                React.useEffect(() => {
+                    if (!formState.reticketing.enabled) return;
+                    setFormState(prev => ({
+                        ...prev,
+                        reticketing: {
+                            ...prev.reticketing,
+                            requestedStartDate: prev.startDate || '',
+                            requestedEndDate: prev.endDate || ''
+                        }
+                    }));
+                }, [formState.startDate, formState.endDate, formState.reticketing.enabled]);
+                const loadTemplate = (templateId) => {
+                    const template = customTemplates.find(t => t.id === templateId) || trips.find(t => t.id === templateId);
+                    if (!template) return;
+                    setFormState(prev => ({
+                        ...prev,
+                        project: template.project || '',
+                        purpose: template.purpose || '',
+                        coordinator: template.coordinator || '',
+                        currency: template.cost?.currency || 'KRW',
+                        costBreakdown: {
+                            flight: Number(template.costBreakdown?.flight || 0),
+                            hotel: Number(template.costBreakdown?.hotel || 0),
+                            transport: Number(template.costBreakdown?.transport || 0),
+                            daily: Number(template.costBreakdown?.daily || 0),
+                            misc: Number(template.costBreakdown?.misc || 0)
+                        },
+                        reticketing: {
+                            ...prev.reticketing,
+                            requestedStartDate: prev.reticketing.enabled ? (prev.reticketing.requestedStartDate || prev.startDate || '') : '',
+                            requestedEndDate: prev.reticketing.enabled ? (prev.reticketing.requestedEndDate || prev.endDate || '') : ''
+                        }
+                    }));
+                    setSegments(template.segments?.map(s => ({ ...s, id: Math.random().toString(36).slice(2) })) || segments);
+                };
+                const saveCurrentTemplate = () => {
+                    const template = {
+                        id: `custom-${Date.now()}`,
+                        project: formState.project,
+                        purpose: formState.purpose,
+                        coordinator: formState.coordinator,
+                        cost: { currency: formState.currency },
+                        costBreakdown: formState.costBreakdown,
+                        segments: segments.map(({id, ...rest}) => rest),
+                        label: `${formState.project || '프로젝트'} / ${formState.purpose || '목적'} / ${segments[0]?.arr || '목적지'}`
+                    };
+                    setCustomTemplates(prev => [template, ...prev].slice(0, 8));
+                };
+                const handleFileChange = (e) => {
+                    const file = e.target.files[0];
+                    if(!file) return;
+                    if(file.size > 5 * 1024 * 1024) return alert("5MB 이하만 업로드 가능");
+                    setDocuments(prev => [...prev, { id: Date.now() + Math.random(), name: file.name, type: 'E-Ticket', date: getLocalDateString(), file }]);
+                    e.target.value = '';
+                };
+                const addChangeLog = () => {
+                    if(!newChange.date || !newChange.note) return alert("입력 필요");
+                    setChangeLogs(prev => [...prev, newChange]);
+                    setNewChange({date: '', type: '일정변경', note: ''});
+                };
+                const nextStep = () => {
+                    if (step === 0 && (!formState.empId || !formState.project || !formState.purpose || !formState.startDate || !formState.endDate)) return alert("기본 정보를 먼저 입력하세요.");
+                    if (step === 0 && formState.startDate > formState.endDate) return alert("종료일은 시작일보다 빠를 수 없습니다.");
+                    if (step === 1 && !segments.some(seg => seg.dep && seg.arr)) return alert("최소 1개의 항공 여정을 입력하세요.");
+                    setStep(prev => Math.min(prev + 1, 2));
+                };
+
+                const handleSubmit = async (e) => {
+                    e.preventDefault();
+                    try {
+                        const uploadedDocuments = await Promise.all(documents.map(async (docItem) => {
+                            const storagePath = `artifacts/${appId}/trip_docs/${data?.id || 'draft'}/${Date.now()}_${docItem.name}`;
+                            const storageRef = ref(storage, storagePath);
+                            if (docItem.file) await uploadBytes(storageRef, docItem.file);
+                            else if (docItem.data && !docItem.url) await uploadString(storageRef, docItem.data, 'data_url');
+                            else return docItem;
+                            const url = await getDownloadURL(storageRef);
+                            return { id: docItem.id, name: docItem.name, type: docItem.type, date: docItem.date, url, storagePath };
+                        }));
+                        await Promise.all(removedDocuments.filter(d => d?.storagePath).map(d => deleteObject(ref(storage, d.storagePath)).catch(() => null)));
+                        await onSave({
+                            empId: formState.empId,
+                            project: formState.project,
+                            purpose: formState.purpose,
+                            requester: formState.requester,
+                            coordinator: formState.coordinator,
+                            startDate: formState.startDate,
+                            endDate: formState.endDate,
+                            ticketingStatus: formState.ticketingStatus,
+                            ticketNo: formState.ticketNo,
+                            cost: { actual: costTotal, currency: formState.currency },
+                            costBreakdown: formState.costBreakdown,
+                            segments: segments.map(({id, ...rest}) => rest),
+                            changes: changeLogs,
+                            documents: uploadedDocuments,
+                            originalItinerary: formState.originalItinerary,
+                            reticketing: formState.reticketing.enabled ? {
+                                reason: formState.reticketing.reason,
+                                requestedAt: formState.reticketing.requestedAt,
+                                previousStartDate: formState.reticketing.previousStartDate,
+                                previousEndDate: formState.reticketing.previousEndDate,
+                                requestedStartDate: formState.reticketing.requestedStartDate || formState.startDate,
+                                requestedEndDate: formState.reticketing.requestedEndDate || formState.endDate,
+                                extraCost: Number(formState.reticketing.extraCost || 0),
+                                completedAt: formState.reticketing.completedAt,
+                                note: formState.reticketing.note,
+                                status: RETICKETING_FLOW.includes(formState.ticketingStatus) ? formState.ticketingStatus : ''
+                            } : null
+                        }, data?.id);
+                    } catch (err) {
+                        console.error("문서 업로드 실패:", err);
+                        alert("문서 업로드 또는 저장에 실패했습니다.\n\n원인: " + err.message);
+                    }
+                };
+
+                return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                        <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[95vh] overflow-y-auto">
+                            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl sticky top-0 z-10">
+                                <div>
+                                    <h3 className="font-bold text-lg text-gray-800">출장 및 항공권 통합 관리</h3>
+                                    <div className="text-xs text-slate-500 mt-1">{stepTitles[step]} 단계</div>
+                                </div>
+                                <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><i className="fas fa-times text-xl"></i></button>
+                            </div>
+                            <div className="px-6 pt-5 grid grid-cols-3 gap-2">
+                                {stepTitles.map((title, index) => <div key={title} className={`rounded-full h-2 ${index <= step ? 'bg-blue-600' : 'bg-slate-200'}`}></div>)}
+                            </div>
+                            <form onSubmit={handleSubmit} className="p-6 space-y-6">
+                                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <div className="text-xs font-bold text-slate-500 uppercase">최근 템플릿</div>
+                                        <button type="button" onClick={saveCurrentTemplate} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs hover:bg-slate-100">현재 입력을 템플릿 저장</button>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {customTemplates.map(template => <button key={template.id} type="button" onClick={() => loadTemplate(template.id)} className="px-3 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-sm hover:bg-emerald-100">{template.label}</button>)}
+                                        {tripTemplates.length === 0 && customTemplates.length === 0 && <span className="text-sm text-slate-400">저장된 출장 템플릿이 없습니다.</span>}
+                                        {tripTemplates.map(template => <button key={template.id} type="button" onClick={() => loadTemplate(template.id)} className="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm hover:bg-slate-100">{template.label}</button>)}
+                                    </div>
+                                </div>
+
+                                {step === 0 && (
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                        <div className="space-y-4">
+                                            <div><label className="text-xs font-bold text-gray-500 uppercase">출장자</label><select required value={formState.empId} onChange={e => patchForm('empId', e.target.value)} className="w-full border rounded p-2 mt-1"><option value="">선택</option>{employees.map(e => <option key={e.id} value={e.id}>{e.name} ({e.dept})</option>)}</select></div>
+                                            <div><label className="text-xs font-bold text-gray-500 uppercase">프로젝트</label><input required value={formState.project} list="project-options" onChange={e => patchForm('project', e.target.value)} className="w-full border rounded p-2 mt-1" /><datalist id="project-options">{getRecentOptions('project').map(item => <option key={item} value={item} />)}</datalist></div>
+                                            <div><label className="text-xs font-bold text-gray-500 uppercase">출장 목적</label><input required value={formState.purpose} list="purpose-options" onChange={e => patchForm('purpose', e.target.value)} className="w-full border rounded p-2 mt-1" /><datalist id="purpose-options">{getRecentOptions('purpose').map(item => <option key={item} value={item} />)}</datalist></div>
+                                            <div className="grid grid-cols-2 gap-3"><div><label className="text-xs font-bold text-gray-500 uppercase">출국일</label><input required type="date" value={formState.startDate} onChange={e => patchForm('startDate', e.target.value)} className="w-full border rounded p-2 mt-1" /></div><div><label className="text-xs font-bold text-gray-500 uppercase">귀국일</label><input required type="date" value={formState.endDate} onChange={e => patchForm('endDate', e.target.value)} className="w-full border rounded p-2 mt-1" /></div></div>
+                                        </div>
+                                        <div className="space-y-4">
+                                            <div className="grid grid-cols-2 gap-3"><div><label className="text-xs font-bold text-gray-500 uppercase">요청 메모</label><input value={formState.requester} onChange={e => patchForm('requester', e.target.value)} className="w-full border rounded p-2 mt-1" /></div><div><label className="text-xs font-bold text-gray-500 uppercase">처리 메모</label><input value={formState.coordinator} onChange={e => patchForm('coordinator', e.target.value)} className="w-full border rounded p-2 mt-1" /></div></div>
+                                            <div><label className="text-xs font-bold text-gray-500 uppercase">상태</label><select value={formState.ticketingStatus} onChange={e => patchForm('ticketingStatus', e.target.value)} className="w-full border rounded p-2 mt-1">{Object.entries(STATUS_META).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></div>
+                                            <div><label className="text-xs font-bold text-gray-500 uppercase">티켓번호</label><input value={formState.ticketNo} onChange={e => patchForm('ticketNo', e.target.value)} className="w-full border rounded p-2 mt-1 font-mono" /></div>
+                                            <div className="bg-blue-50 border border-blue-100 rounded-xl p-4"><div className="text-xs text-blue-700 font-bold uppercase mb-2">자동 체크</div><div className="text-sm text-slate-700">{formState.startDate && formState.endDate ? `${formState.startDate} ~ ${formState.endDate}` : '기간 입력 전'} / {segments.length}개 여정 / 현재 총액 {formState.currency} {formatMoney(costTotal)}</div></div>
+                                            <div className="bg-orange-50 border border-orange-100 rounded-xl p-4 space-y-3">
+                                                <label className="flex items-center gap-2 text-sm font-semibold text-orange-800">
+                                                    <input type="checkbox" checked={formState.reticketing.enabled} onChange={e => setFormState(prev => ({
+                                                        ...prev,
+                                                        reticketing: {
+                                                            ...prev.reticketing,
+                                                            enabled: e.target.checked,
+                                                            previousStartDate: prev.reticketing.previousStartDate || prev.originalItinerary?.startDate || data?.startDate || '',
+                                                            previousEndDate: prev.reticketing.previousEndDate || prev.originalItinerary?.endDate || data?.endDate || '',
+                                                            requestedStartDate: prev.startDate || '',
+                                                            requestedEndDate: prev.endDate || '',
+                                                            requestedAt: prev.reticketing.requestedAt || getLocalDateString()
+                                                        }
+                                                    }))} />
+                                                    최초 발권 이후 일정변경/재발권 관리 사용
+                                                </label>
+                                                {formState.reticketing.enabled && (
+                                                    <div className="grid grid-cols-1 gap-3">
+                                                        <div className="grid grid-cols-2 gap-3">
+                                                            <div><label className="text-xs font-bold text-orange-700 uppercase">최초 출국일</label><input type="date" value={formState.reticketing.previousStartDate} onChange={e => patchReticketing('previousStartDate', e.target.value)} className="w-full border rounded p-2 mt-1" /></div>
+                                                            <div><label className="text-xs font-bold text-orange-700 uppercase">최초 귀국일</label><input type="date" value={formState.reticketing.previousEndDate} onChange={e => patchReticketing('previousEndDate', e.target.value)} className="w-full border rounded p-2 mt-1" /></div>
+                                                        </div>
+                                                        <div className="grid grid-cols-2 gap-3">
+                                                            <div><label className="text-xs font-bold text-orange-700 uppercase">변경 요청일</label><input type="date" value={formState.reticketing.requestedAt} onChange={e => patchReticketing('requestedAt', e.target.value)} className="w-full border rounded p-2 mt-1" /></div>
+                                                            <div><label className="text-xs font-bold text-orange-700 uppercase">재발권 완료일</label><input type="date" value={formState.reticketing.completedAt} onChange={e => patchReticketing('completedAt', e.target.value)} className="w-full border rounded p-2 mt-1" /></div>
+                                                        </div>
+                                                        <div><label className="text-xs font-bold text-orange-700 uppercase">변경 사유</label><input value={formState.reticketing.reason} onChange={e => patchReticketing('reason', e.target.value)} placeholder="예: 고객 요청으로 귀국일 2일 연장" className="w-full border rounded p-2 mt-1" /></div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {step === 1 && (
+                                    <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
+                                        <div>
+                                            <div className="flex justify-between items-center mb-3"><h4 className="font-bold text-gray-800">항공 여정</h4><button type="button" onClick={addSeg} className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded font-bold">+ 추가</button></div>
+                                            <div className="space-y-3">
+                                                {segments.map((s) => (
+                                                    <div key={s.id} className="bg-gray-50 border border-gray-200 rounded-xl p-4 relative">
+                                                        <div className="grid grid-cols-1 md:grid-cols-6 gap-2">
+                                                            <input value={s.dep} list="airport-options" onChange={e=>updateSegment(s.id, 'dep', e.target.value.toUpperCase())} placeholder="출발(ICN)" className="border rounded p-2 text-sm font-bold uppercase" />
+                                                            <input value={s.arr} list="airport-options" onChange={e=>updateSegment(s.id, 'arr', e.target.value.toUpperCase())} placeholder="도착(JFK)" className="border rounded p-2 text-sm font-bold uppercase" />
+                                                            <input type="date" value={s.date} onChange={e=>updateSegment(s.id, 'date', e.target.value)} className="border rounded p-2 text-sm md:col-span-2" />
+                                                            <input value={s.airline} onChange={e=>updateSegment(s.id, 'airline', e.target.value.toUpperCase())} placeholder="항공사(KE)" className="border rounded p-2 text-sm uppercase" />
+                                                            <input value={s.flightNo} onChange={e=>updateSegment(s.id, 'flightNo', e.target.value.toUpperCase())} placeholder="편명" className="border rounded p-2 text-sm uppercase" />
+                                                        </div>
+                                                        <input value={s.pnr} onChange={e=>updateSegment(s.id, 'pnr', e.target.value)} placeholder="예약번호 (PNR)" className="w-full border rounded p-2 text-sm mt-2 text-blue-600 font-mono" />
+                                                        {segments.length > 1 && <button type="button" onClick={() => removeSeg(s.id)} className="absolute top-3 right-3 text-red-500"><i className="fas fa-trash"></i></button>}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <datalist id="airport-options">{getRecentAirports().map(item => <option key={item} value={item} />)}</datalist>
+                                        </div>
+                                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                                            <h4 className="font-bold text-slate-800 mb-3">비용 구조</h4>
+                                            <div className="space-y-3">
+                                                {[
+                                                    ['flight', '항공'],
+                                                    ['hotel', '숙박'],
+                                                    ['transport', '교통'],
+                                                    ['daily', '일비'],
+                                                    ['misc', '기타']
+                                                ].map(([key, label]) => <div key={key}><label className="text-xs font-bold text-slate-500 uppercase">{label}</label><input type="number" value={formState.costBreakdown[key]} onChange={e => patchCost(key, e.target.value)} className="w-full border rounded p-2 mt-1 text-right" /></div>)}
+                                                {formState.reticketing.enabled && <div><label className="text-xs font-bold text-orange-700 uppercase">재발권 추가 비용</label><input type="number" value={formState.reticketing.extraCost} onChange={e => patchReticketing('extraCost', Number(e.target.value || 0))} className="w-full border rounded p-2 mt-1 text-right" /></div>}
+                                                <div><label className="text-xs font-bold text-slate-500 uppercase">통화</label><select value={formState.currency} onChange={e => patchForm('currency', e.target.value)} className="w-full border rounded p-2 mt-1"><option value="KRW">KRW</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="JPY">JPY</option><option value="CNY">CNY</option></select></div>
+                                                <div className="rounded-lg bg-blue-600 text-white p-4"><div className="text-xs uppercase text-blue-100">자동 합계</div><div className="text-2xl font-bold mt-1">{formState.currency} {formatMoney(costTotal)}</div></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {step === 2 && (
+                                    <div className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-6">
+                                        <div className="space-y-6">
+                                            <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 flex flex-col">
+                                                <div className="flex justify-between items-center mb-3"><h4 className="font-bold text-slate-700"><i className="fas fa-folder-open mr-2"></i> 문서 보관함</h4><label className="cursor-pointer bg-slate-200 px-3 py-1 rounded text-xs font-bold"><i className="fas fa-upload mr-1"></i> 파일 선택<input type="file" className="hidden" onChange={handleFileChange} /></label></div>
+                                                <div className="space-y-2 min-h-[120px]">{documents.map(d=><div key={d.id} className="bg-white border rounded p-2 flex justify-between items-center"><div className="flex items-center overflow-hidden"><i className={`fas ${d.name.toLowerCase().endsWith('.pdf')?'fa-file-pdf':'fa-file-image'} text-red-500 mr-2`}></i><span className="text-xs truncate">{d.name}</span>{d.file && <span className="ml-2 text-xxs text-amber-600 font-bold">업로드 대기</span>}</div><div className="flex gap-2">{(d.url || d.data) && <a href={d.url || d.data} download={d.name} className="text-blue-500"><i className="fas fa-download"></i></a>}<button type="button" onClick={()=>removeDocument(d)} className="text-red-400"><i className="fas fa-trash"></i></button></div></div>)}</div>
+                                            </div>
+                                            <div className="bg-orange-50 border border-orange-100 rounded-xl p-4">
+                                                <div className="font-bold text-orange-800 mb-3">변경 이력</div>
+                                                <div className="space-y-2 mb-3">{changeLogs.map((l,i)=><div key={i} className="bg-white border p-2 text-xs rounded"><b>{l.date}</b> <span className="text-orange-600">{l.type}</span><div className="text-gray-600">{l.note}</div></div>)}</div>
+                                                <div className="grid gap-2"><div className="grid grid-cols-2 gap-2"><input type="date" value={newChange.date} onChange={e=>setNewChange({...newChange,date:e.target.value})} className="border text-xs p-2 rounded"/><select value={newChange.type} onChange={e=>setNewChange({...newChange,type:e.target.value})} className="border text-xs p-2 rounded"><option>일정변경</option><option>재발권</option><option>단순메모</option></select></div><input value={newChange.note} onChange={e=>setNewChange({...newChange,note:e.target.value})} className="border text-xs p-2 rounded" placeholder="내용"/><button type="button" onClick={addChangeLog} className="bg-orange-100 text-orange-700 text-xs font-bold py-2 rounded">추가</button></div>
+                                            </div>
+                                            {formState.reticketing.enabled && (
+                                                <div className="bg-orange-50 border border-orange-100 rounded-xl p-4">
+                                                    <div className="font-bold text-orange-800 mb-3">재발권 비교</div>
+                                                    <div className="grid grid-cols-2 gap-3 text-sm">
+                                                        <div className="bg-white border rounded-lg p-3">
+                                                            <div className="text-xs text-slate-500 uppercase mb-1">최초 발권 일정</div>
+                                                            <div className="font-semibold">{formState.reticketing.previousStartDate || '-'} ~ {formState.reticketing.previousEndDate || '-'}</div>
+                                                        </div>
+                                                        <div className="bg-white border rounded-lg p-3">
+                                                            <div className="text-xs text-slate-500 uppercase mb-1">변경 후 일정</div>
+                                                            <div className="font-semibold">{formState.startDate || '-'} ~ {formState.endDate || '-'}</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="mt-3 text-xs text-slate-600">귀국일만 변경돼도 최초 발권 일정과 현재 운영 일정을 함께 저장합니다.</div>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4 shadow-sm">
+                                            <h4 className="font-bold text-slate-800">최종 검토</h4>
+                                            <div className="text-sm text-slate-600 space-y-2">
+                                                <div><b>출장자</b> {getEmployeeById(formState.empId)?.name || '-'}</div>
+                                                <div><b>프로젝트</b> {formState.project || '-'}</div>
+                                                <div><b>기간</b> {formState.startDate || '-'} ~ {formState.endDate || '-'}</div>
+                                                <div><b>상태</b> {STATUS_META[formState.ticketingStatus]?.label || '-'}</div>
+                                                <div><b>비용</b> {formState.currency} {formatMoney(costTotal)}</div>
+                                                <div><b>재발권 추가비용</b> {formState.reticketing.enabled ? `${formState.currency} ${formatMoney(formState.reticketing.extraCost || 0)}` : '-'}</div>
+                                                <div><b>첨부</b> {documents.length}건</div>
+                                            </div>
+                                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-500">저장 후에는 작업 보드, 캘린더, 상세 패널에서 바로 관리할 수 있습니다.</div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="flex justify-between pt-4 border-t gap-3">
+                                    <div>{step > 0 && <button type="button" onClick={() => setStep(prev => prev - 1)} className="px-6 py-2 rounded border">이전</button>}</div>
+                                    <div className="flex gap-3">
+                                        <button type="button" onClick={onClose} className="px-6 py-2 rounded border">취소</button>
+                                        {step < 2 ? <button type="button" onClick={nextStep} className="bg-blue-600 text-white px-8 py-2 rounded font-bold">다음</button> : <button type="submit" className="bg-blue-600 text-white px-8 py-2 rounded font-bold">완료</button>}
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="flex min-h-screen bg-transparent">
+                    {/* Sidebar */}
+                    <aside className="w-64 bg-slate-900 text-white hidden md:flex flex-col h-screen fixed left-0 top-0 z-20 shadow-2xl">
+                        <div className="p-8">
+                            <h1 className="text-2xl font-black text-white tracking-tighter flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-500 to-cyan-500 flex items-center justify-center text-sm shadow-lg">
+                                    <i className="fas fa-plane-departure text-white text-xs"></i>
+                                </div>
+                                출장관리<span className="text-blue-400">.Pro</span>
+                            </h1>
+                            <p className="text-slate-500 text-[10px] mt-1 uppercase tracking-widest font-bold">
+                                Enterprise Solution
+                            </p>
+                        </div>
+                        <nav className="flex-1 px-4 space-y-2 overflow-y-auto sidebar-scroll-hidden">
+                            {[
+                                {id:'dashboard',icon:'fas fa-chart-line',label:'경영진 대시보드'},
+                                {id:'workqueue',icon:'fas fa-inbox',label:'작업함'},
+                                {id:'map',icon:'fas fa-globe-americas',label:'실시간 위치 관제'},
+                                {id:'trips',icon:'fas fa-plane',label:'출장 및 항공권'},
+                                {id:'reports',icon:'fas fa-file-lines',label:'리포트'},
+                                {id:'employees',icon:'fas fa-users',label:'임직원 관리'},
+                                {id:'settings',icon:'fas fa-gear',label:'설정'}
+                            ].map(item => (
+                                <button
+                                    key={item.id}
+                                    onClick={() => setView(item.id)}
+                                    className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-200 group ${
+                                        view === item.id
+                                            ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50 translate-x-1'
+                                            : 'text-slate-400 hover:bg-slate-800 hover:text-white hover:translate-x-1'
+                                    }`}
+                                >
+                                    <i className={`${item.icon} w-5 text-center text-base`}></i>
+                                    <span>{item.label}</span>
+                                    {view === item.id && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-300"></div>}
+                                </button>
+                            ))}
+                        </nav>
+
+                        <div className="p-6 border-t border-slate-800">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-500 to-cyan-500 flex items-center justify-center font-bold text-sm shadow-lg">
+                                    {(officeflowSession?.name || appSettings.operatorName || '관리자').charAt(0)}
+                                </div>
+                                <div className="leading-tight">
+                                    <div className="text-sm font-bold">{officeflowSession?.name || appSettings.operatorName || '관리자'}</div>
+                                    <div className="text-xs text-slate-500">시스템 마스터</div>
+                                </div>
+                            </div>
+                            <div
+                                className={`mt-4 flex items-center gap-2 text-[11px] font-semibold px-2.5 py-2 rounded-lg border ${
+                                    dbStatus === 'error'
+                                        ? 'text-red-300 bg-red-900/30 border-red-900/40'
+                                        : dbStatus === 'online'
+                                            ? 'text-emerald-300 bg-emerald-900/20 border-emerald-900/40'
+                                            : 'text-amber-300 bg-amber-900/20 border-amber-900/40'
+                                }`}
+                            >
+                                <i className={`fas ${dbStatus === 'error' ? 'fa-cloud-slash' : 'fa-cloud'} ${dbStatus === 'error' ? 'text-red-300' : dbStatus === 'online' ? 'text-emerald-300' : 'text-amber-300'}`}></i>
+                                <span>{dbStatus === 'error' ? '클라우드 오류' : dbStatus === 'online' ? '클라우드 연동됨' : '클라우드 연결중'}</span>
+                                <span className="ml-auto">{dbStatus === 'error' ? '확인 필요' : '정상'}</span>
+                            </div>
+                        </div>
+                    </aside>
+
+                    {/* Content */}
+                    <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative rounded-[30px] glass-panel mt-3 mr-3 mb-3 lg:mt-4 lg:mr-4 lg:mb-4 md:ml-[272px]">
+                        <header className="h-[84px] flex items-center justify-between px-5 lg:px-8 z-10 border-b border-slate-200/70 bg-white/65 backdrop-blur-xl">
+                            <div>
+                                <div className="hero-chip mb-2 hidden md:inline-flex"><i className="fas fa-sparkles text-blue-600"></i> Travel Operations Center</div>
+                                <h1 className="text-xl lg:text-2xl font-bold text-gray-800 flex items-center">
+                                {view === 'dashboard' && <><i className="fas fa-chart-pie mr-2 text-gray-400"></i> 경영진 대시보드</>}
+                                {view === 'workqueue' && <><i className="fas fa-inbox mr-2 text-gray-400"></i> 작업함</>}
+                                {view === 'map' && <><i className="fas fa-satellite-dish mr-2 text-gray-400"></i> 실시간 위치 관제 센터</>}
+                                {view === 'trips' && <><i className="fas fa-list-alt mr-2 text-gray-400"></i> 출장 및 항공권 관리</>}
+                                {view === 'reports' && <><i className="fas fa-file-lines mr-2 text-gray-400"></i> 리포트</>}
+                                {view === 'employees' && <><i className="fas fa-address-card mr-2 text-gray-400"></i> 임직원 여권/비자 관리</>}
+                                {view === 'settings' && <><i className="fas fa-gear mr-2 text-gray-400"></i> 설정</>}
+                                </h1>
+                            </div>
+                            <div className="flex items-center space-x-3 lg:space-x-5">
+                                <div className="hidden lg:flex items-center gap-2">
+                                    <select value={densityMode} onChange={e => setDensityMode(e.target.value)} className="bg-white/80 border border-slate-200 text-gray-900 text-sm rounded-xl px-3 py-2.5 shadow-sm">
+                                        <option value="comfortable">여유 보기</option>
+                                        <option value="compact">조밀 보기</option>
+                                    </select>
+                                </div>
+                                {/* Year Filter */}
+                                <div className="flex items-center rounded-2xl border border-slate-200 bg-white/80 px-3 py-2 shadow-sm">
+                                    <span className="text-[11px] font-bold text-gray-500 mr-2 uppercase tracking-[0.16em]">조회 연도</span>
+                                    <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className="bg-transparent text-gray-900 text-sm focus:ring-0 focus:border-transparent block p-0 border-0">
+                                        {availableYears.map(year => (
+                                            <option key={year} value={year}>{year}년</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="text-right hidden md:block"><div className="text-sm font-bold text-gray-800">{officeflowSession?.name || '관리자'}</div><div className="text-xs text-gray-500">Travel Manager</div></div>
+                                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-slate-900 to-slate-700 text-white flex items-center justify-center font-bold shadow-sm">{String((officeflowSession?.name || officeflowSession?.email || 'A')).charAt(0).toUpperCase()}</div>
+                            </div>
+                        </header>
+
+                        <div className="flex-1 overflow-auto bg-pattern rounded-b-[30px]">
+                            {view === 'dashboard' && <Dashboard />}
+                            {view === 'workqueue' && <WorkQueue />}
+                            {view === 'map' && <GlobalMap />}
+                            {view === 'trips' && <TripManager />}
+                            {view === 'reports' && <ReportsView />}
+                            {view === 'employees' && <EmployeeManager />}
+                            {view === 'settings' && <SettingsView />}
+                        </div>
+                        
+                        {/* Modals Implemented Inline */}
+                        {empModal.open && (
+                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                                <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                                    <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl sticky top-0 z-10">
+                                        <h3 className="font-bold text-lg text-gray-800">임직원 상세 정보</h3>
+                                        <button onClick={closeEmployeeModal} className="text-gray-400 hover:text-gray-600"><i className="fas fa-times text-xl"></i></button>
+                                    </div>
+                                    <form onSubmit={handleSaveEmployee} className="p-6 space-y-6">
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="space-y-1"><label className="text-xs font-bold text-gray-500 uppercase">성명</label><input required name="name" defaultValue={empModal.data?.name} className="w-full border rounded p-2" /></div>
+                                            <div className="space-y-1"><label className="text-xs font-bold text-gray-500 uppercase">사번</label><input name="empId" defaultValue={empModal.data?.empId} className="w-full border rounded p-2" /></div>
+                                            <div className="space-y-1"><label className="text-xs font-bold text-gray-500 uppercase">부서</label><input name="dept" defaultValue={empModal.data?.dept} className="w-full border rounded p-2" /></div>
+                                            <div className="space-y-1"><label className="text-xs font-bold text-gray-500 uppercase">직급</label><input name="position" defaultValue={empModal.data?.position} className="w-full border rounded p-2" /></div>
+                                            <div className="space-y-1"><label className="text-xs font-bold text-gray-500 uppercase">영문명</label><input name="englishName" defaultValue={empModal.data?.profile?.englishName} className="w-full border rounded p-2" /></div>
+                                            <div className="space-y-1"><label className="text-xs font-bold text-gray-500 uppercase">국적</label><input name="nationality" defaultValue={empModal.data?.profile?.nationality} className="w-full border rounded p-2" /></div>
+                                            <div className="space-y-1"><label className="text-xs font-bold text-gray-500 uppercase">긴급 연락처</label><input name="emergencyContact" defaultValue={empModal.data?.profile?.emergencyContact} className="w-full border rounded p-2" /></div>
+                                            <div className="space-y-1"><label className="text-xs font-bold text-gray-500 uppercase">자주 방문 국가</label><input name="frequentCountries" defaultValue={(empModal.data?.profile?.frequentCountries || []).join(', ')} className="w-full border rounded p-2" placeholder="US, JP, VN" /></div>
+                                        </div>
+                                        <div className="border-t pt-4">
+                                            <h4 className="font-bold text-blue-800 mb-3 text-sm"><i className="fas fa-passport mr-2"></i> 여권 정보</h4>
+                                            <div className="grid grid-cols-3 gap-4 bg-blue-50 p-4 rounded-lg">
+                                                <div><label className="text-xs font-bold text-blue-600">번호</label><input required name="pp_number" defaultValue={empModal.data?.passport?.number} className="w-full border rounded p-2" /></div>
+                                                <div><label className="text-xs font-bold text-blue-600">국가</label><input name="pp_country" defaultValue={empModal.data?.passport?.country || 'KR'} className="w-full border rounded p-2" /></div>
+                                                <div><label className="text-xs font-bold text-blue-600">만료일</label><input required type="date" name="pp_expiry" defaultValue={empModal.data?.passport?.expiry} className="w-full border rounded p-2" /></div>
+                                            </div>
+                                        </div>
+                                        <div className="border-t pt-4">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <h4 className="font-bold text-emerald-800 text-sm"><i className="fas fa-stamp mr-2"></i> 비자 정보</h4>
+                                                <button type="button" onClick={() => setEmployeeVisaRows(prev => [...prev, { country: '', type: '', expiry: '' }])} className="text-xs bg-emerald-50 text-emerald-700 px-3 py-1 rounded font-bold">+ 비자 추가</button>
+                                            </div>
+                                            <div className="space-y-2">
+                                                {employeeVisaRows.length === 0 && <div className="text-sm text-slate-400 bg-slate-50 border border-dashed rounded p-3">등록된 비자 정보가 없습니다.</div>}
+                                                {employeeVisaRows.map((visa, idx) => (
+                                                    <div key={idx} className="grid grid-cols-12 gap-2 bg-emerald-50 p-3 rounded border border-emerald-100 items-end">
+                                                        <div className="col-span-3"><label className="text-xs font-bold text-emerald-700">국가</label><input value={visa.country} onChange={e => setEmployeeVisaRows(prev => prev.map((v, i) => i === idx ? { ...v, country: e.target.value } : v))} className="w-full border rounded p-2 uppercase" placeholder="US" /></div>
+                                                        <div className="col-span-4"><label className="text-xs font-bold text-emerald-700">종류</label><input value={visa.type} onChange={e => setEmployeeVisaRows(prev => prev.map((v, i) => i === idx ? { ...v, type: e.target.value } : v))} className="w-full border rounded p-2" placeholder="B1/B2" /></div>
+                                                        <div className="col-span-4"><label className="text-xs font-bold text-emerald-700">만료일</label><input type="date" value={visa.expiry} onChange={e => setEmployeeVisaRows(prev => prev.map((v, i) => i === idx ? { ...v, expiry: e.target.value } : v))} className="w-full border rounded p-2" /></div>
+                                                        <div className="col-span-1"><button type="button" onClick={() => setEmployeeVisaRows(prev => prev.filter((_, i) => i !== idx))} className="w-full h-10 rounded bg-red-50 text-red-500 border border-red-100"><i className="fas fa-trash"></i></button></div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div className="flex justify-between pt-4 border-t gap-3">
+                                            <div>
+                                                {empModal.data?.id && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleDeleteEmployee(empModal.data)}
+                                                        className="px-6 py-2 rounded border border-red-200 text-red-600 hover:bg-red-50 font-bold"
+                                                    >
+                                                        삭제
+                                                    </button>
+                                                )}
+                                            </div>
+                                            <div className="flex gap-3">
+                                            <button type="button" onClick={closeEmployeeModal} className="px-6 py-2 rounded border hover:bg-gray-50">취소</button>
+                                            <button type="submit" className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 font-bold">저장</button>
+                                            </div>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+                        {tripModal.open && <TripFormModal onClose={() => setTripModal({open: false, data: null})} onSave={handleSaveTripData} data={tripModal.data} employees={employees} />}
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
