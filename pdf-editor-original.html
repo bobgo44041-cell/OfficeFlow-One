@@ -124,6 +124,7 @@
             const [previewIndex, setPreviewIndex] = useState(null);
             const [previewLoading, setPreviewLoading] = useState(false);
             const [isRestoringSession, setIsRestoringSession] = useState(false);
+            const [sessionSaveWarning, setSessionSaveWarning] = useState("");
             const [outputOptions, setOutputOptions] = useState({
                 mergeFileName: "Merged_Output",
                 splitPrefix: "Split_PDFs",
@@ -142,6 +143,7 @@
             const prevPagesRef = useRef([]);
             const reorderSnapshotRef = useRef(null);
             const hasRestoredSessionRef = useRef(false);
+            const sessionWarningShownRef = useRef(false);
 
             const clonePagesState = useCallback((sourcePages) => (
                 sourcePages.map((page) => ({ ...page }))
@@ -296,8 +298,22 @@
                     outputOptions,
                 };
 
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-            }, [pages, outputOptions, isRestoringSession]);
+                try {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+                    if (sessionSaveWarning) setSessionSaveWarning("");
+                    sessionWarningShownRef.current = false;
+                } catch (error) {
+                    console.error("자동 저장 실패:", error);
+                    const warningMessage = "페이지 수가 많아 자동 저장이 중단되었습니다. 작업은 계속 가능하며, 필요하면 '작업 내보내기'로 저장하세요.";
+                    if (!sessionWarningShownRef.current) {
+                        sessionWarningShownRef.current = true;
+                        alert(warningMessage);
+                    }
+                    if (sessionSaveWarning !== warningMessage) {
+                        setSessionSaveWarning(warningMessage);
+                    }
+                }
+            }, [pages, outputOptions, isRestoringSession, sessionSaveWarning]);
 
             useEffect(() => {
                 if (previewIndex === null) return undefined;
@@ -935,6 +951,8 @@
 
             const clearSavedSession = () => {
                 localStorage.removeItem(STORAGE_KEY);
+                sessionWarningShownRef.current = false;
+                setSessionSaveWarning("");
             };
 
             const exportSession = () => {
@@ -1123,6 +1141,11 @@
                         </div>
                         {pages.length > 0 && (
                             <div className="px-6 pb-4 flex flex-col gap-3">
+                                {sessionSaveWarning && (
+                                    <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-3 text-sm font-semibold">
+                                        {sessionSaveWarning}
+                                    </div>
+                                )}
                                 {showOptions && (
                                     <div className="bg-white/90 border border-gray-200 rounded-2xl p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 shadow-sm">
                                         <label className="flex flex-col gap-1 text-sm font-semibold text-gray-700">
