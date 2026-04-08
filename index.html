@@ -1229,12 +1229,31 @@
       }
 
       .launcher-app .app-icon {
+        position: relative;
         width: 84px;
         height: 84px;
         border-radius: 24px;
         display: grid;
         place-items: center;
         background: transparent;
+      }
+
+      .app-notification-badge {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        min-width: 24px;
+        height: 24px;
+        padding: 0 7px;
+        border-radius: 999px;
+        border: 2px solid #fff;
+        background: linear-gradient(135deg, #ff5a6b, #e11d48);
+        box-shadow: 0 10px 18px rgba(225, 29, 72, 0.28);
+        color: #fff;
+        font-size: 0.74rem;
+        font-weight: 800;
+        line-height: 20px;
+        text-align: center;
       }
 
       .launcher-app .app-icon svg {
@@ -2649,6 +2668,7 @@
               category: "all",
               composeOpen: false,
               currentPostId: null,
+              lastSeenAtMs: 0,
               page: 1,
               pageSize: 10,
               initialized: false,
@@ -2846,6 +2866,7 @@
         );
         const firebaseServices = initFirebaseServices();
         let boardSyncPromise = null;
+        let boardUnsubscribe = null;
         let accountMenuOpen = false;
         let accountDangerOpen = false;
         let authStateInitialized = false;
@@ -2920,6 +2941,11 @@
               session: state.session,
               authMode: state.authMode,
               navigation: state.navigation,
+              apps: {
+                board: {
+                  lastSeenAtMs: Number(state.apps?.board?.lastSeenAtMs || 0),
+                },
+              },
             })
           );
           localStorage.setItem(
@@ -3036,6 +3062,24 @@
               return;
             }
 
+            stopBoardPostsSync();
+            state = {
+              ...state,
+              apps: {
+                ...state.apps,
+                board: {
+                  ...state.apps.board,
+                  posts: [],
+                  initialized: false,
+                  loading: false,
+                  error: "",
+                  currentPostId: null,
+                  composeOpen: false,
+                  lastSeenAtMs: 0,
+                  page: 1,
+                },
+              },
+            };
             authStateInitialized = true;
           });
         }
@@ -3044,6 +3088,45 @@
           state = updater(state);
           saveState();
           render();
+        }
+
+        function getBoardUnreadCount() {
+          const posts = Array.isArray(state.apps?.board?.posts) ? state.apps.board.posts : [];
+          const lastSeenAtMs = Number(state.apps?.board?.lastSeenAtMs || 0);
+          const currentEmail = String(state.session.email || "").toLowerCase();
+          return posts.filter((post) => {
+            const createdAtMs = Number(post.createdAtMs || 0);
+            const authorEmail = String(post.authorEmail || "").toLowerCase();
+            return createdAtMs > lastSeenAtMs && authorEmail !== currentEmail;
+          }).length;
+        }
+
+        function markBoardPostsSeen() {
+          const posts = Array.isArray(state.apps?.board?.posts) ? state.apps.board.posts : [];
+          const latestPostAtMs = posts.reduce(
+            (maxValue, post) => Math.max(maxValue, Number(post.createdAtMs || 0)),
+            0
+          );
+          if (!latestPostAtMs) return;
+          if (latestPostAtMs <= Number(state.apps?.board?.lastSeenAtMs || 0)) return;
+          setState((prev) => ({
+            ...prev,
+            apps: {
+              ...prev.apps,
+              board: {
+                ...prev.apps.board,
+                lastSeenAtMs: latestPostAtMs,
+              },
+            },
+          }));
+        }
+
+        function stopBoardPostsSync() {
+          if (typeof boardUnsubscribe === "function") {
+            boardUnsubscribe();
+          }
+          boardUnsubscribe = null;
+          boardSyncPromise = null;
         }
 
         async function syncCurrentUserProfile(override = null) {
@@ -3444,6 +3527,9 @@
 
         function renderCurrentView() {
           elements.viewContainer.replaceChildren();
+          if (state.session.authenticated && firebaseServices.db) {
+            void syncBoardPostsFromCloud();
+          }
           const isEmbeddedView =
             state.navigation.current === "ceremony" ||
             state.navigation.current === "pdf" ||
@@ -3577,6 +3663,15 @@
           iconBox.className =
             "app-icon " + app.id + (app.ownerOnly ? " owner" : app.premium ? " premium" : "");
           iconBox.appendChild(app.icon.cloneNode(true));
+          if (app.id === "board") {
+            const unreadCount = getBoardUnreadCount();
+            if (unreadCount > 0) {
+              const badge = document.createElement("span");
+              badge.className = "app-notification-badge";
+              badge.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+              iconBox.appendChild(badge);
+            }
+          }
 
           const title = document.createElement("h3");
           title.textContent = app.title;
@@ -3609,6 +3704,9 @@
         function renderBoardApp() {
           if (state.session.authenticated && !state.apps.board.initialized && !state.apps.board.loading) {
             void syncBoardPostsFromCloud();
+          }
+          if (state.session.authenticated) {
+            markBoardPostsSeen();
           }
           const board = state.apps.board;
           const filteredPosts = getBoardFilteredPosts();
@@ -3787,7 +3885,8 @@
         }
 
         async function syncBoardPostsFromCloud() {
-          if (boardSyncPromise || !firebaseServices.db || !state.session.authenticated) return;
+          if (!firebaseServices.db || !state.session.authenticated) return Promise.resolve();
+          if (boardUnsubscribe) return boardSyncPromise || Promise.resolve();
 
           setState((prev) => ({
             ...prev,
@@ -3801,59 +3900,70 @@
             },
           }));
 
-          boardSyncPromise = firebaseServices.db
-            .collection(BOARD_COLLECTION)
-            .orderBy("createdAtMs", "desc")
-            .get()
-            .then((snapshot) => {
-              const posts = snapshot.docs.map((doc) => {
-                const data = doc.data() || {};
-                return {
-                  id: doc.id,
-                  category: data.category || "일반",
-                  title: data.title || "제목 없음",
-                  content: data.content || "",
-                  author: data.author || data.authorEmail || "익명",
-                  authorEmail: data.authorEmail || "",
-                  createdAt: data.createdAt || "-",
-                  createdAtMs: Number(data.createdAtMs || 0),
-                  pinned: Boolean(data.pinned),
-                  isPrivate: Boolean(data.isPrivate),
-                };
-              });
-
-              setState((prev) => ({
-                ...prev,
-                apps: {
-                  ...prev.apps,
-                  board: {
-                    ...prev.apps.board,
-                    posts,
-                    initialized: true,
-                    loading: false,
-                    error: "",
-                  },
-                },
-              }));
-            })
-            .catch((error) => {
-              console.error("Board sync failed:", error);
-              setState((prev) => ({
-                ...prev,
-                apps: {
-                  ...prev.apps,
-                  board: {
-                    ...prev.apps.board,
-                    initialized: true,
-                    loading: false,
-                    error: "게시판 데이터를 불러오지 못했습니다.",
-                  },
-                },
-              }));
-            })
-            .finally(() => {
+          boardSyncPromise = new Promise((resolve) => {
+            let settled = false;
+            const settle = () => {
+              if (settled) return;
+              settled = true;
               boardSyncPromise = null;
-            });
+              resolve();
+            };
+
+            boardUnsubscribe = firebaseServices.db
+              .collection(BOARD_COLLECTION)
+              .orderBy("createdAtMs", "desc")
+              .onSnapshot(
+                (snapshot) => {
+                  const posts = snapshot.docs.map((doc) => {
+                    const data = doc.data() || {};
+                    return {
+                      id: doc.id,
+                      category: data.category || "일반",
+                      title: data.title || "제목 없음",
+                      content: data.content || "",
+                      author: data.author || data.authorEmail || "익명",
+                      authorEmail: data.authorEmail || "",
+                      createdAt: data.createdAt || "-",
+                      createdAtMs: Number(data.createdAtMs || 0),
+                      pinned: Boolean(data.pinned),
+                      isPrivate: Boolean(data.isPrivate),
+                    };
+                  });
+
+                  setState((prev) => ({
+                    ...prev,
+                    apps: {
+                      ...prev.apps,
+                      board: {
+                        ...prev.apps.board,
+                        posts,
+                        initialized: true,
+                        loading: false,
+                        error: "",
+                      },
+                    },
+                  }));
+                  settle();
+                },
+                (error) => {
+                  console.error("Board sync failed:", error);
+                  stopBoardPostsSync();
+                  setState((prev) => ({
+                    ...prev,
+                    apps: {
+                      ...prev.apps,
+                      board: {
+                        ...prev.apps.board,
+                        initialized: true,
+                        loading: false,
+                        error: "게시판 데이터를 불러오지 못했습니다.",
+                      },
+                    },
+                  }));
+                  settle();
+                }
+              );
+          });
 
           await boardSyncPromise;
         }
@@ -7609,6 +7719,7 @@
         }
 
         async function logout() {
+          stopBoardPostsSync();
           if (firebaseServices.enabled && firebaseServices.auth) {
             try {
               await firebaseServices.auth.signOut();
@@ -7628,6 +7739,20 @@
             },
             navigation: {
               current: "dashboard",
+            },
+            apps: {
+              ...prev.apps,
+              board: {
+                ...prev.apps.board,
+                posts: [],
+                initialized: false,
+                loading: false,
+                error: "",
+                currentPostId: null,
+                composeOpen: false,
+                lastSeenAtMs: 0,
+                page: 1,
+              },
             },
           }));
           visitTrackedForSession = false;
