@@ -3828,6 +3828,16 @@
           });
         }
 
+        async function fetchBoardPostsSafely(queryFactory, label) {
+          try {
+            const snapshot = await queryFactory().get();
+            return snapshot.docs.map((doc) => normalizeBoardPost(doc));
+          } catch (error) {
+            console.error("Board query failed:", label, error);
+            return [];
+          }
+        }
+
         async function syncBoardPostsFromCloud() {
           if (boardSyncPromise || !firebaseServices.db || !state.session.authenticated) return;
 
@@ -3847,44 +3857,46 @@
             .then(async () => {
               const currentUid = String(state.session.uid || "");
               const currentEmail = normalizeEmail(state.session.email);
-
-              let queryTasks = [];
               if (state.session.role === "owner") {
-                queryTasks = [
-                  firebaseServices.db
-                    .collection(BOARD_COLLECTION)
-                    .orderBy("createdAtMs", "desc")
-                    .get(),
-                ];
-              } else {
-                queryTasks = [
-                  firebaseServices.db
-                    .collection(BOARD_COLLECTION)
-                    .where("isPrivate", "==", false)
-                    .get(),
-                ];
-                if (currentEmail) {
-                  queryTasks.push(
-                    firebaseServices.db
-                      .collection(BOARD_COLLECTION)
-                      .where("authorEmail", "==", currentEmail)
-                      .get()
+                let posts = await fetchBoardPostsSafely(
+                  () => firebaseServices.db.collection(BOARD_COLLECTION).orderBy("createdAtMs", "desc"),
+                  "owner-all-ordered"
+                );
+                if (!posts.length) {
+                  posts = await fetchBoardPostsSafely(
+                    () => firebaseServices.db.collection(BOARD_COLLECTION),
+                    "owner-all-fallback"
                   );
                 }
-                if (currentUid) {
-                  queryTasks.push(
-                    firebaseServices.db
-                      .collection(BOARD_COLLECTION)
-                      .where("authorUid", "==", currentUid)
-                      .get()
-                  );
-                }
+                return posts;
               }
 
-              const snapshots = await Promise.all(queryTasks);
-              const fetchedPosts = mergeBoardPosts(
-                ...snapshots.map((snapshot) => snapshot.docs.map((doc) => normalizeBoardPost(doc)))
-              );
+              const queryResults = [
+                await fetchBoardPostsSafely(
+                  () => firebaseServices.db.collection(BOARD_COLLECTION).where("isPrivate", "==", false),
+                  "public-posts"
+                ),
+              ];
+              if (currentEmail) {
+                queryResults.push(
+                  await fetchBoardPostsSafely(
+                    () => firebaseServices.db.collection(BOARD_COLLECTION).where("authorEmail", "==", currentEmail),
+                    "my-posts-email"
+                  )
+                );
+              }
+              if (currentUid) {
+                queryResults.push(
+                  await fetchBoardPostsSafely(
+                    () => firebaseServices.db.collection(BOARD_COLLECTION).where("authorUid", "==", currentUid),
+                    "my-posts-uid"
+                  )
+                );
+              }
+              return mergeBoardPosts(...queryResults);
+            })
+            .then((fetchedPosts) => {
+              const hasFetchedPosts = Array.isArray(fetchedPosts) && fetchedPosts.length > 0;
 
               setState((prev) => ({
                 ...prev,
@@ -3893,12 +3905,12 @@
                   board: {
                     ...prev.apps.board,
                     posts: mergeBoardPosts(
-                      fetchedPosts,
+                      Array.isArray(fetchedPosts) ? fetchedPosts : [],
                       prev.apps.board.posts.filter((post) => isBoardPostOwnedByCurrentUser(post))
                     ),
                     initialized: true,
                     loading: false,
-                    error: "",
+                    error: hasFetchedPosts || prev.apps.board.posts.length ? "" : "게시판 데이터를 불러오지 못했습니다.",
                   },
                 },
               }));
