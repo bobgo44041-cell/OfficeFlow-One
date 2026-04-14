@@ -3786,6 +3786,48 @@
             });
         }
 
+        function normalizeEmail(email) {
+          return String(email || "").trim().toLowerCase();
+        }
+
+        function isBoardPostOwnedByCurrentUser(post) {
+          const currentUid = String(state.session.uid || "");
+          const currentEmail = normalizeEmail(state.session.email);
+          return (
+            (post.authorUid && currentUid && post.authorUid === currentUid) ||
+            (normalizeEmail(post.authorEmail) && normalizeEmail(post.authorEmail) === currentEmail)
+          );
+        }
+
+        function normalizeBoardPost(doc) {
+          const data = doc.data() || {};
+          return {
+            id: doc.id,
+            category: data.category || "일반",
+            title: data.title || "제목 없음",
+            content: data.content || "",
+            author: data.author || data.authorEmail || "익명",
+            authorEmail: normalizeEmail(data.authorEmail || ""),
+            authorUid: data.authorUid || "",
+            createdAt: data.createdAt || "-",
+            createdAtMs: Number(data.createdAtMs || 0),
+            pinned: Boolean(data.pinned),
+            isPrivate: Boolean(data.isPrivate),
+          };
+        }
+
+        function mergeBoardPosts(...collections) {
+          const merged = new Map();
+          collections.flat().forEach((post) => {
+            if (!post?.id) return;
+            merged.set(post.id, post);
+          });
+          return [...merged.values()].sort((a, b) => {
+            if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+            return Number(b.createdAtMs || 0) - Number(a.createdAtMs || 0);
+          });
+        }
+
         async function syncBoardPostsFromCloud() {
           if (boardSyncPromise || !firebaseServices.db || !state.session.authenticated) return;
 
@@ -3801,26 +3843,48 @@
             },
           }));
 
-          boardSyncPromise = firebaseServices.db
-            .collection(BOARD_COLLECTION)
-            .orderBy("createdAtMs", "desc")
-            .get()
-            .then((snapshot) => {
-              const posts = snapshot.docs.map((doc) => {
-                const data = doc.data() || {};
-                return {
-                  id: doc.id,
-                  category: data.category || "일반",
-                  title: data.title || "제목 없음",
-                  content: data.content || "",
-                  author: data.author || data.authorEmail || "익명",
-                  authorEmail: data.authorEmail || "",
-                  createdAt: data.createdAt || "-",
-                  createdAtMs: Number(data.createdAtMs || 0),
-                  pinned: Boolean(data.pinned),
-                  isPrivate: Boolean(data.isPrivate),
-                };
-              });
+          boardSyncPromise = Promise.resolve()
+            .then(async () => {
+              const currentUid = String(state.session.uid || "");
+              const currentEmail = normalizeEmail(state.session.email);
+
+              let queryTasks = [];
+              if (state.session.role === "owner") {
+                queryTasks = [
+                  firebaseServices.db
+                    .collection(BOARD_COLLECTION)
+                    .orderBy("createdAtMs", "desc")
+                    .get(),
+                ];
+              } else {
+                queryTasks = [
+                  firebaseServices.db
+                    .collection(BOARD_COLLECTION)
+                    .where("isPrivate", "==", false)
+                    .get(),
+                ];
+                if (currentEmail) {
+                  queryTasks.push(
+                    firebaseServices.db
+                      .collection(BOARD_COLLECTION)
+                      .where("authorEmail", "==", currentEmail)
+                      .get()
+                  );
+                }
+                if (currentUid) {
+                  queryTasks.push(
+                    firebaseServices.db
+                      .collection(BOARD_COLLECTION)
+                      .where("authorUid", "==", currentUid)
+                      .get()
+                  );
+                }
+              }
+
+              const snapshots = await Promise.all(queryTasks);
+              const fetchedPosts = mergeBoardPosts(
+                ...snapshots.map((snapshot) => snapshot.docs.map((doc) => normalizeBoardPost(doc)))
+              );
 
               setState((prev) => ({
                 ...prev,
@@ -3828,7 +3892,10 @@
                   ...prev.apps,
                   board: {
                     ...prev.apps.board,
-                    posts,
+                    posts: mergeBoardPosts(
+                      fetchedPosts,
+                      prev.apps.board.posts.filter((post) => isBoardPostOwnedByCurrentUser(post))
+                    ),
                     initialized: true,
                     loading: false,
                     error: "",
@@ -3862,7 +3929,7 @@
           if (state.session.role === "owner") return "운영자";
           if (state.session.name) return state.session.name;
           const matched = state.accounts.find(
-            (account) => account.email === String(state.session.email || "").toLowerCase()
+            (account) => account.email === normalizeEmail(state.session.email)
           );
           if (matched?.name) return matched.name;
           return state.session.email || "익명";
@@ -3871,7 +3938,7 @@
         function canOpenBoardPost(post) {
           if (!post.isPrivate) return true;
           if (state.session.role === "owner") return true;
-          if (post.authorEmail && post.authorEmail === state.session.email) return true;
+          if (isBoardPostOwnedByCurrentUser(post)) return true;
           pushToast("자유게시판", "비공개 질문은 작성자와 운영자만 열람할 수 있습니다.");
           return false;
         }
@@ -4180,7 +4247,8 @@
               title: titleInput.value.trim(),
               content: contentInput.value.trim(),
               author: getBoardAuthorName(),
-              authorEmail: state.session.email || "",
+              authorEmail: normalizeEmail(state.session.email),
+              authorUid: String(state.session.uid || ""),
               createdAt,
               createdAtMs: now.getTime(),
               pinned: state.session.role === "owner" ? pinInput.checked : false,
@@ -4275,7 +4343,7 @@
 
           const canDelete =
             state.session.role === "owner" ||
-            (post.authorEmail && post.authorEmail === state.session.email);
+            isBoardPostOwnedByCurrentUser(post);
           if (canDelete) {
             const deleteButton = document.createElement("button");
             deleteButton.type = "button";
