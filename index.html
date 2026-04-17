@@ -7585,6 +7585,56 @@
           return [...map.values()].sort((a, b) => a.email.localeCompare(b.email));
         }
 
+        function isEmbeddedBrowser() {
+          const ua = String(window.navigator.userAgent || "");
+          const markers = [
+            "KAKAOTALK",
+            "FBAN",
+            "FBAV",
+            "Instagram",
+            "Line/",
+            "NAVER",
+            "DaumApps",
+            "Electron",
+            "WebView",
+            "; wv)",
+          ];
+          return markers.some((marker) => ua.includes(marker));
+        }
+
+        function getExternalBrowserOpenUrl() {
+          const currentUrl = window.location.href;
+          const isAndroid = /Android/i.test(window.navigator.userAgent || "");
+          const protocol = String(window.location.protocol || "").replace(":", "");
+          if (!isAndroid || (protocol !== "http" && protocol !== "https")) {
+            return currentUrl;
+          }
+          const sanitized = currentUrl.replace(/^https?:\/\//i, "");
+          return "intent://" + sanitized + "#Intent;scheme=" + protocol + ";package=com.android.chrome;end";
+        }
+
+        function promptOpenInExternalBrowser() {
+          const currentUrl = window.location.href;
+          const externalUrl = getExternalBrowserOpenUrl();
+          const shouldOpen = window.confirm(
+            "현재 브라우저에서는 Google 로그인이 차단됩니다.\n\n카카오톡/사내 앱/임베디드 브라우저가 아니라 Chrome, Edge, Safari 같은 외부 브라우저에서 다시 열어야 합니다.\n\n가능하면 외부 브라우저로 열어보시겠습니까?"
+          );
+          if (!shouldOpen) {
+            pushToast(
+              "외부 브라우저 필요",
+              "현재 주소를 Chrome, Edge, Safari 같은 기본 브라우저에 직접 붙여 열어주세요."
+            );
+            return;
+          }
+
+          try {
+            window.location.href = externalUrl;
+          } catch (error) {
+            console.error("Failed to open external browser:", error);
+            window.open(currentUrl, "_blank", "noopener,noreferrer");
+          }
+        }
+
         async function handleSocialLogin(provider) {
           if (provider !== "google") return;
           if (window.location.protocol === "file:") {
@@ -7592,6 +7642,10 @@
               "Google 로그인 불가",
               "file://에서는 Google 로그인이 동작하지 않습니다. http://127.0.0.1:5500/office-saas-mvp.html 로 열어주세요."
             );
+            return;
+          }
+          if (isEmbeddedBrowser()) {
+            promptOpenInExternalBrowser();
             return;
           }
           if (!firebaseServices.enabled || !firebaseServices.auth || !window.firebase?.auth) {
