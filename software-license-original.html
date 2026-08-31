@@ -143,8 +143,6 @@
 
         // --- Utils ---
         // --- 계약 관리 상수/헬퍼 ---
-        const DEFAULT_USD_KRW = 1400;
-
         const RENEWAL_STATUSES = [
             { value: 'review',   label: '검토중',   cls: 'bg-slate-100 text-slate-700' },
             { value: 'renew',    label: '갱신예정', cls: 'bg-blue-100 text-blue-700' },
@@ -158,7 +156,7 @@
 
         const EMPTY_LICENSE_FORM = {
             name: '', type: 'Subscription', paymentCycle: 'Yearly',
-            seats: 1, cost: 0, currency: 'KRW',
+            seats: 1, cost: 0,
             startDate: '', expiryDate: '',
             autoRenew: false, noticeDays: 30,
             renewalStatus: 'review',
@@ -202,28 +200,19 @@
         // 실제로 챙겨야 하는 날짜: 자동갱신이면 통보 마감일, 아니면 만료일
         const getActionDate = (license) => getNoticeDeadline(license) || license.expiryDate || '';
 
-        const normalizeCurrency = (c) => (c === 'USD' ? 'USD' : 'KRW');
+        // 비용은 실제 결제되는 원화 금액만 다룬다.
+        // 달러 계약이라도 카드/세금계산서는 원화로 정산되므로 그 금액을 그대로 적는다.
+        const formatKrw = (amount) => (parseInt(amount) || 0).toLocaleString() + '원';
 
-        const toKrw = (amount, currency, fxRate) => {
-            const value = parseInt(amount) || 0;
-            return normalizeCurrency(currency) === 'USD'
-                ? Math.round(value * (parseInt(fxRate) || DEFAULT_USD_KRW))
-                : value;
-        };
-
-        const formatMoney = (amount, currency) => {
-            const value = parseInt(amount) || 0;
-            return normalizeCurrency(currency) === 'USD'
-                ? '$' + value.toLocaleString()
-                : value.toLocaleString() + '원';
-        };
-
-        // 구독 계약 1건의 월 환산 원화 비용
-        const monthlyKrwCost = (license, fxRate) => {
+        // 구독 계약 1건의 월 환산 비용
+        const monthlyCost = (license) => {
             if (license.type !== 'Subscription') return 0;
-            const krw = toKrw(license.cost, license.currency, fxRate);
-            return license.paymentCycle !== 'Monthly' ? Math.round(krw / 12) : krw;
+            const cost = parseInt(license.cost) || 0;
+            return license.paymentCycle !== 'Monthly' ? Math.round(cost / 12) : cost;
         };
+
+        // 통화 필드가 남아 있는 예전 데이터인지 (원화로 다시 입력해야 함)
+        const isLegacyForeignCost = (license) => license && license.currency === 'USD';
 
         const downloadCSV = (data, filename) => {
             const bom = "\uFEFF";
@@ -451,7 +440,7 @@
             );
         }
 
-        function CostDetailModal({ licenses, onClose, fxRate }) {
+        function CostDetailModal({ licenses, onClose }) {
             const details = useMemo(() => {
                 return licenses
                     .filter(l => l.type === 'Subscription')
@@ -459,13 +448,13 @@
                         const isMonthly = l.paymentCycle === 'Monthly';
                         return {
                             ...l,
-                            monthlyCost: monthlyKrwCost(l, fxRate),
+                            monthlyCost: monthlyCost(l),
                             originalCost: parseInt(l.cost) || 0,
                             isMonthly,
                         };
                     })
                     .sort((a, b) => b.monthlyCost - a.monthlyCost);
-            }, [licenses, fxRate]);
+            }, [licenses]);
 
             const total = details.reduce((acc, curr) => acc + curr.monthlyCost, 0);
 
@@ -482,7 +471,6 @@
                                 <li><strong>연간(Yearly) 결제:</strong> 입력된 금액 ÷ 12개월 (반올림)</li>
                                 <li><strong>월간(Monthly) 결제:</strong> 입력된 금액 그대로 합산</li>
                                 <li>* '월간'으로 명시되지 않은 모든 항목은 '연간'으로 간주하여 계산됩니다.</li>
-                                <li><strong>USD 계약:</strong> 환율 {(parseInt(fxRate)||DEFAULT_USD_KRW).toLocaleString()}원 기준으로 원화 환산 후 합산</li>
                             </ul>
                         </div>
                         <div className="flex-1 overflow-y-auto custom-scroll">
@@ -505,8 +493,7 @@
                                                 </span>
                                             </td>
                                             <td className="p-3 text-right text-gray-500">
-                                                {formatMoney(item.originalCost, item.currency)}
-                                                {normalizeCurrency(item.currency) === 'USD' && <div className="text-[10px] text-gray-400">환산 {toKrw(item.originalCost, 'USD', fxRate).toLocaleString()}원</div>}
+                                                {formatKrw(item.originalCost)}
                                             </td>
                                             <td className="p-3 text-right font-bold text-gray-900">{item.monthlyCost.toLocaleString()}원</td>
                                         </tr>
@@ -524,16 +511,15 @@
         }
 
         // --- Feature Screens ---
-        function DashboardPage({ users, licenses, assignments, onDownloadReport, fxRate }) {
+        function DashboardPage({ users, licenses, assignments, onDownloadReport }) {
             const [showCostDetail, setShowCostDetail] = useState(false);
             const [alertWindow, setAlertWindow] = useState(30);
 
             // [FIXED] 정확한 월 구독 비용 계산 로직 적용 (수량 곱하기 제거, 총액 입력 가정)
             // [LOGIC UPDATE] 'Monthly'가 아니면 무조건 'Yearly'로 취급 (데이터 누락 시 안전장치)
-            // 통화가 섞여 있으므로 모두 원화로 환산한 뒤 월 단위로 합산한다.
             const totalCost = useMemo(
-                () => licenses.reduce((acc, license) => acc + monthlyKrwCost(license, fxRate), 0),
-                [licenses, fxRate]
+                () => licenses.reduce((acc, license) => acc + monthlyCost(license), 0),
+                [licenses]
             );
 
             const totalSeats = useMemo(() => licenses.reduce((a, c) => a + (parseInt(c.seats)||0), 0), [licenses]);
@@ -577,7 +563,7 @@
 
             return (
                 <div className="space-y-6 animate-fade-in">
-                    {showCostDetail && <CostDetailModal licenses={licenses} onClose={() => setShowCostDetail(false)} fxRate={fxRate} />}
+                    {showCostDetail && <CostDetailModal licenses={licenses} onClose={() => setShowCostDetail(false)} />}
                     
                     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                         <h2 className="text-2xl font-bold text-gray-800">현황 대시보드</h2>
@@ -816,7 +802,7 @@
             );
         };
 
-        function LicenseManagement({ licenses, assignments, users, onAdd, onDelete, onUpdate, fxRate }) {
+        function LicenseManagement({ licenses, assignments, users, onAdd, onDelete, onUpdate }) {
             const [form, setForm] = useState({ ...EMPTY_LICENSE_FORM });
             const [editId, setEditId] = useState(null);
             const [viewingLicense, setViewingLicense] = useState(null);
@@ -839,15 +825,14 @@
             
             const handleDownload = () => {
                 const data = [
-                    ["SW명", "계약형태", "결제주기", "수량", "통화", "비용", "월환산(원)", "시작일", "만료일", "자동갱신", "통보기한(일)", "통보마감일", "갱신상태", "공급업체", "공급업체연락처", "담당자"],
+                    ["SW명", "계약형태", "결제주기", "수량", "비용(원)", "월환산(원)", "시작일", "만료일", "자동갱신", "통보기한(일)", "통보마감일", "갱신상태", "공급업체", "공급업체연락처", "담당자"],
                     ...sortedLics.map(l => [
                         l.name,
                         l.type,
                         l.type === 'Subscription' ? (l.paymentCycle === 'Monthly' ? '월' : '연') : '-',
                         l.seats,
-                        normalizeCurrency(l.currency),
                         l.cost,
-                        monthlyKrwCost(l, fxRate),
+                        monthlyCost(l),
                         l.startDate || '',
                         l.expiryDate || '',
                         l.autoRenew ? 'Y' : 'N',
@@ -985,16 +970,10 @@
                                     </div>
                                 )}
 
-                                <div className="grid grid-cols-3 gap-2">
-                                    <select className="border rounded px-2 py-2 text-sm bg-white" value={form.currency} onChange={e=>setForm({...form,currency:e.target.value})}>
-                                        <option value="KRW">KRW</option>
-                                        <option value="USD">USD</option>
-                                    </select>
-                                    <input type="number" className="col-span-2 border rounded px-3 py-2 text-sm" placeholder="단가" value={form.cost} onChange={e=>setForm({...form,cost:parseInt(e.target.value)||0})}/>
+                                <div>
+                                    <input type="number" className="w-full border rounded px-3 py-2 text-sm" placeholder="계약 금액 (원)" value={form.cost} onChange={e=>setForm({...form,cost:parseInt(e.target.value)||0})}/>
+                                    <p className="text-[10px] text-gray-400 mt-1 ml-1">달러 계약이라도 실제 결제되는 원화 금액을 입력하세요.</p>
                                 </div>
-                                {form.currency === 'USD' && (
-                                    <p className="text-[10px] text-gray-400 -mt-2 ml-1">환율 {(parseInt(fxRate)||DEFAULT_USD_KRW).toLocaleString()}원 기준 ≈ {toKrw(form.cost, 'USD', fxRate).toLocaleString()}원 (환경설정에서 변경)</p>
-                                )}
 
                                 <div className="grid grid-cols-2 gap-2">
                                     <div><label className="text-[10px] text-gray-400 ml-1">계약 시작일</label><input type="date" className="w-full border rounded px-3 py-2 text-sm" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})}/></div>
@@ -1062,12 +1041,15 @@
                                             {l.vendorContact && <div className="text-[10px] text-gray-300 mt-0.5">{l.vendorContact}</div>}
                                         </td>
                                         <td className="px-4 py-4 text-xs whitespace-nowrap">
-                                            {formatMoney(l.cost, l.currency)}
+                                            {formatKrw(l.cost)}
                                             {l.type === 'Subscription' ? <span className="text-gray-400 ml-1">({l.paymentCycle === 'Monthly' ? '월' : '연'})</span> : ''}
                                             {l.type === 'Subscription' && (
                                                 <div className="text-[10px] text-blue-600 mt-1 font-bold">
-                                                    ≈ 월 {monthlyKrwCost(l, fxRate).toLocaleString()}원
+                                                    ≈ 월 {monthlyCost(l).toLocaleString()}원
                                                 </div>
+                                            )}
+                                            {isLegacyForeignCost(l) && (
+                                                <div className="text-[10px] text-red-600 mt-1 font-bold">USD로 입력됨 · 원화로 수정 필요</div>
                                             )}
                                         </td>
                                         <td className="px-4 py-4 cursor-pointer font-bold text-blue-600 hover:text-blue-800 hover:underline transition-colors" onClick={()=>setViewingLicense(l)}>{uCount}/{l.seats}</td>
@@ -1264,7 +1246,7 @@
         // --- 감사 로그 ---
         const AUDIT_FIELD_LABELS = {
             name: '이름', dept: '부서', type: '계약형태', seats: '수량', cost: '비용',
-            currency: '통화', paymentCycle: '결제주기', startDate: '시작일', expiryDate: '만료일',
+            paymentCycle: '결제주기', startDate: '시작일', expiryDate: '만료일',
             autoRenew: '자동갱신', noticeDays: '통보기한', renewalStatus: '갱신상태',
             vendor: '공급업체', vendorContact: '업체연락처', manager: '담당자',
             userId: '사용자', licenseId: '라이선스', assignedAt: '할당일',
@@ -1398,11 +1380,11 @@
 
         // --- 갱신 캘린더 ---
         // 계약이 언제 몰려 있고 그때 예산이 얼마나 필요한지 월 단위로 본다.
-        function RenewalCalendarPage({ licenses, fxRate }) {
+        function RenewalCalendarPage({ licenses }) {
             const [monthsAhead, setMonthsAhead] = useState(12);
 
             // 갱신 시 나가는 돈은 연 환산으로 비교한다 (월 계약도 연 기준으로 맞춤).
-            const annualKrw = (l) => monthlyKrwCost(l, fxRate) * 12;
+            const annualKrw = (l) => monthlyCost(l) * 12;
 
             const rows = useMemo(() => licenses.map(l => {
                 const actionDate = getActionDate(l);
@@ -1413,7 +1395,7 @@
                     isNotice: Boolean(getNoticeDeadline(l)),
                     annual: annualKrw(l),
                 };
-            }), [licenses, fxRate]);
+            }), [licenses]);
 
             const undated = useMemo(() => rows.filter(r => r.dDay === null), [rows]);
             const past = useMemo(() => rows.filter(r => r.dDay !== null && r.dDay < 0).sort((a, b) => a.dDay - b.dDay), [rows]);
@@ -1565,11 +1547,8 @@
             );
         }
 
-        function SettingsPage({ services, isDemoMode, onImportCsv, fxRate, onSaveFxRate }) {
+        function SettingsPage({ services, isDemoMode, onImportCsv }) {
             const [pw, setPw] = useState('');
-            const [rateInput, setRateInput] = useState(String(fxRate));
-            const [savingRate, setSavingRate] = useState(false);
-            useEffect(() => { setRateInput(String(fxRate)); }, [fxRate]);
             const [loading, setLoading] = useState(false);
             const [importType, setImportType] = useState('users');
             const [importFile, setImportFile] = useState(null);
@@ -1684,32 +1663,6 @@
                             <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><Icons.Settings /> 데이터 관리</h3>
                             <div className="space-y-4">
                                 <div>
-                                    <label className="text-xs font-bold text-gray-500 mb-1 block">USD 환율 (원)</label>
-                                    <div className="flex gap-2">
-                                        <input
-                                            type="number"
-                                            min="1"
-                                            className="flex-1 border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                            value={rateInput}
-                                            onChange={(e) => setRateInput(e.target.value)}
-                                        />
-                                        <button
-                                            type="button"
-                                            disabled={savingRate}
-                                            onClick={async () => {
-                                                setSavingRate(true);
-                                                const ok = await onSaveFxRate(rateInput);
-                                                setSavingRate(false);
-                                                alert(ok ? '환율을 저장했습니다.' : '환율 저장에 실패했습니다. 1 이상의 숫자인지 확인하세요.');
-                                            }}
-                                            className="bg-slate-800 text-white px-4 rounded text-sm font-bold hover:bg-slate-700 disabled:opacity-50"
-                                        >
-                                            {savingRate ? '저장중' : '저장'}
-                                        </button>
-                                    </div>
-                                    <p className="text-[11px] text-gray-400 mt-1">USD로 등록한 구독료를 원화로 환산할 때 쓰입니다.</p>
-                                </div>
-                                <div className="pt-4 border-t">
                                     <label className="text-xs font-bold text-gray-500 mb-1 block">클라우드 연결</label>
                                     <div className="border rounded p-3 bg-slate-50 text-xs text-slate-600 space-y-1">
                                         <p className="flex justify-between"><span className="text-slate-400">프로젝트</span><span className="font-mono">{window.userFirebaseConfig?.projectId || '-'}</span></p>
@@ -1767,7 +1720,6 @@
             const [licenses, setLicenses] = useState([]);
             const [assignments, setAssignments] = useState([]);
             const [auditLogs, setAuditLogs] = useState([]);
-            const [settingsDocs, setSettingsDocs] = useState([]);
             const [loading, setLoading] = useState(true);
             const [isDemoMode, setIsDemoMode] = useState(false);
             const [permError, setPermError] = useState(false);
@@ -1784,17 +1736,8 @@
                 const l = s('licenses', setLicenses);
                 const a = s('assignments', setAssignments, true);
                 const logs = s('auditLogs', setAuditLogs);
-                // settings 에는 비밀번호 문서가 함께 들어오므로 민감 필드는 제외하고 보관한다.
-                const st = s('settings', (docs) => setSettingsDocs(docs.map(({ password, ...rest }) => rest)));
-                return () => { u(); l(); a(); logs(); st(); };
+                return () => { u(); l(); a(); logs(); };
             }, [services, user, isDemoMode]);
-
-            // settings/general 문서에 저장된 USD 환율. 없으면 기본값.
-            const fxRate = useMemo(() => {
-                const general = settingsDocs.find(d => d.id === 'general');
-                const rate = parseInt(general && general.usdToKrw);
-                return Number.isNaN(rate) || rate <= 0 ? DEFAULT_USD_KRW : rate;
-            }, [settingsDocs]);
 
             const snapshotForAudit = (col, row) => {
                 if (!row) return null;
@@ -1805,7 +1748,6 @@
                     type: row.type || '',
                     seats: parseInt(row.seats) || 0,
                     cost: parseInt(row.cost) || 0,
-                    currency: normalizeCurrency(row.currency),
                     paymentCycle: row.paymentCycle || '',
                     startDate: row.startDate || '',
                     expiryDate: row.expiryDate || '',
@@ -1938,27 +1880,6 @@
                 return { ok: true };
             };
 
-            const handleSaveFxRate = async (rate) => {
-                const value = parseInt(rate);
-                if (Number.isNaN(value) || value <= 0) return false;
-                if (isDemoMode) {
-                    setSettingsDocs(prev => {
-                        const rest = prev.filter(d => d.id !== 'general');
-                        return [...rest, { id: 'general', usdToKrw: value }];
-                    });
-                    return true;
-                }
-                try {
-                    const { setDoc, licenseDoc } = window.firebaseModules;
-                    await setDoc(licenseDoc(services.db, 'settings', 'general'), { usdToKrw: value, updatedAt: new Date().toISOString() }, { merge: true });
-                    await addAuditLog('update', 'settings', `USD 환율 ${value}원으로 변경`);
-                    return true;
-                } catch (e) {
-                    console.warn('fx rate save failed', e);
-                    return false;
-                }
-            };
-
             const handleImportCsv = async (type, rows) => {
                 const headers = rows[0].map(h => (h || '').replace(/^\uFEFF/, '').trim());
                 const dataRows = rows.slice(1).filter(r => r.some(c => String(c || '').trim() !== ''));
@@ -1981,13 +1902,14 @@
                     const typeIdx = headers.findIndex(h => h === '계약형태');
                     const cycleIdx = headers.findIndex(h => h === '결제주기');
                     const seatsIdx = headers.findIndex(h => h === '수량');
-                    const costIdx = headers.findIndex(h => h === '비용');
+                    const costIdx = headers.findIndex(h => h === '비용(원)') >= 0
+                        ? headers.findIndex(h => h === '비용(원)')
+                        : headers.findIndex(h => h === '비용');
                     const expiryIdx = headers.findIndex(h => h === '만료일');
                     if (nameIdx < 0) throw new Error("라이선스 CSV 헤더에 'SW명' 컬럼이 필요합니다.");
 
                     // 확장 컬럼은 없으면 기본값으로 넘어간다 (구버전 CSV 호환).
                     const at = (label) => headers.findIndex(h => h === label);
-                    const currencyIdx = at('통화');
                     const startIdx = at('시작일');
                     const autoIdx = at('자동갱신');
                     const noticeIdx = at('통보기한(일)');
@@ -2016,7 +1938,6 @@
                             type: typeValue,
                             seats: Number.isNaN(seats) ? 1 : seats,
                             cost: Number.isNaN(cost) ? 0 : cost,
-                            currency: normalizeCurrency(cell(row, currencyIdx)),
                             startDate: cell(row, startIdx),
                             expiryDate,
                             autoRenew,
@@ -2044,7 +1965,7 @@
                 const totalSeats = licenses.reduce((acc, l) => acc + (parseInt(l.seats) || 0), 0);
                 const usedSeats = assignments.length;
                 const util = totalSeats > 0 ? Math.round((usedSeats / totalSeats) * 100) : 0;
-                const monthly = licenses.reduce((acc, l) => acc + monthlyKrwCost(l, fxRate), 0);
+                const monthly = licenses.reduce((acc, l) => acc + monthlyCost(l), 0);
                 // 자동갱신 계약은 해지 통보 마감일 기준으로 본다.
                 const withDDay = licenses
                     .map(l => ({ l, actionDate: getActionDate(l), dDay: diffDaysFromToday(getActionDate(l)) }))
@@ -2061,7 +1982,6 @@
                     ["사용 시트", `${usedSeats}`],
                     ["활용률", `${util}%`],
                     ["월 예상 구독비용(원)", `${monthly}`],
-                    ["USD 환율(원)", `${fxRate}`],
                     [],
                     ["기한 경과", "대응 기한", "경과일", "담당자", "갱신상태"],
                     ...past.map(x => [
@@ -2125,13 +2045,13 @@
                         <main className="flex-1 overflow-y-auto p-4 pb-24 md:p-8 md:pb-8 relative custom-scroll">
                             {loading ? <div className="flex justify-center mt-20"><div className="spinner"></div></div> : (
                                 <div className="max-w-7xl mx-auto">
-                                    {activeTab === 'dashboard' && <DashboardPage users={users} licenses={licenses} assignments={assignments} onDownloadReport={handleDownloadOpsReport} fxRate={fxRate} />}
+                                    {activeTab === 'dashboard' && <DashboardPage users={users} licenses={licenses} assignments={assignments} onDownloadReport={handleDownloadOpsReport} />}
                                     {activeTab === 'users' && <UserManagement users={users} onAdd={d=>handleDataOp('add','users',{...d, createdAt:new Date().toISOString()})} onDelete={handleDeleteUser} onUpdate={(id,d)=>handleDataOp('update','users',d,id)} />}
-                                    {activeTab === 'licenses' && <LicenseManagement licenses={licenses} assignments={assignments} users={users} onAdd={d=>handleDataOp('add','licenses',{...d, createdAt:new Date().toISOString()})} onDelete={handleDeleteLicense} onUpdate={(id,d)=>handleDataOp('update','licenses',d,id)} fxRate={fxRate} />}
+                                    {activeTab === 'licenses' && <LicenseManagement licenses={licenses} assignments={assignments} users={users} onAdd={d=>handleDataOp('add','licenses',{...d, createdAt:new Date().toISOString()})} onDelete={handleDeleteLicense} onUpdate={(id,d)=>handleDataOp('update','licenses',d,id)} />}
                                     {activeTab === 'assignments' && <AssignmentManagement users={users} licenses={licenses} assignments={assignments} onAssign={handleAssignSafe} onUnassign={id=>handleDataOp('del','assignments',null,id)} />}
-                                    {activeTab === 'renewals' && <RenewalCalendarPage licenses={licenses} fxRate={fxRate} />}
+                                    {activeTab === 'renewals' && <RenewalCalendarPage licenses={licenses} />}
                                     {activeTab === 'audit' && <AuditLogPage auditLogs={auditLogs} />}
-                                    {activeTab === 'settings' && <SettingsPage services={services} isDemoMode={isDemoMode} onImportCsv={handleImportCsv} fxRate={fxRate} onSaveFxRate={handleSaveFxRate} />}
+                                    {activeTab === 'settings' && <SettingsPage services={services} isDemoMode={isDemoMode} onImportCsv={handleImportCsv} />}
                                 </div>
                             )}
                         </main>
