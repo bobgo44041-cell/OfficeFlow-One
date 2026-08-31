@@ -1473,6 +1473,128 @@
         line-height: 1.8;
       }
 
+      .board-reply-section {
+        margin-top: 26px;
+        padding-top: 22px;
+        border-top: 1px solid var(--line);
+      }
+
+      .board-reply-heading {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0 0 16px;
+        font-size: 1.05rem;
+        font-weight: 700;
+        letter-spacing: -0.03em;
+      }
+
+      .board-reply-count {
+        padding: 2px 10px;
+        border-radius: 999px;
+        background: rgba(20, 32, 58, 0.07);
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      .board-reply-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .board-reply-item {
+        padding: 18px 20px;
+        border-radius: 16px;
+        border: 1px solid rgba(20, 32, 58, 0.08);
+        background: rgba(255, 255, 255, 0.82);
+      }
+
+      .board-reply-item.admin {
+        border-color: rgba(43, 92, 230, 0.28);
+        background: rgba(43, 92, 230, 0.05);
+      }
+
+      .board-reply-meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .board-reply-author {
+        font-weight: 700;
+        font-size: 0.94rem;
+      }
+
+      .board-reply-date {
+        font-size: 0.82rem;
+        color: var(--muted);
+      }
+
+      .board-reply-content {
+        white-space: pre-wrap;
+        line-height: 1.75;
+        font-size: 0.96rem;
+      }
+
+      .board-reply-delete {
+        margin-left: auto;
+        border: 0;
+        background: none;
+        padding: 2px 4px;
+        font-size: 0.82rem;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .board-reply-delete:hover,
+      .board-reply-delete:focus-visible {
+        color: #d92d20;
+        text-decoration: underline;
+      }
+
+      .board-reply-form {
+        margin-top: 18px;
+        display: grid;
+        gap: 12px;
+      }
+
+      .board-reply-form textarea {
+        min-height: 120px;
+        resize: vertical;
+      }
+
+      .board-reply-locked {
+        margin-top: 16px;
+        padding: 16px 18px;
+        border-radius: 14px;
+        border: 1px dashed rgba(20, 32, 58, 0.16);
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .board-answer-badge {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        vertical-align: middle;
+      }
+
+      .board-answer-badge.done {
+        background: rgba(16, 133, 96, 0.12);
+        color: #0f7a58;
+      }
+
+      .board-answer-badge.waiting {
+        background: rgba(214, 129, 16, 0.14);
+        color: #a35c06;
+      }
+
       .board-empty {
         padding: 40px 20px;
         text-align: center;
@@ -3824,7 +3946,51 @@
             createdAtMs: Number(data.createdAtMs || 0),
             pinned: Boolean(data.pinned),
             isPrivate: Boolean(data.isPrivate),
+            replies: normalizeBoardReplies(data.replies),
           };
+        }
+
+        function normalizeBoardReplies(rawReplies) {
+          if (!Array.isArray(rawReplies)) return [];
+          return rawReplies
+            .filter((reply) => reply && typeof reply === "object")
+            .map((reply) => ({
+              id: String(reply.id || ""),
+              content: String(reply.content || ""),
+              author: reply.author || reply.authorEmail || "익명",
+              authorEmail: normalizeEmail(reply.authorEmail || ""),
+              authorUid: String(reply.authorUid || ""),
+              createdAt: reply.createdAt || "-",
+              createdAtMs: Number(reply.createdAtMs || 0),
+              byAdmin: Boolean(reply.byAdmin),
+            }))
+            .sort((a, b) => Number(a.createdAtMs || 0) - Number(b.createdAtMs || 0));
+        }
+
+        // 답글은 게시글 문서의 replies 배열에 저장한다.
+        // 기존 ofw_board_posts update 규칙이 운영자와 작성자를 이미 허용하므로
+        // Firestore 규칙을 추가로 바꾸지 않아도 동작한다.
+        function canReplyToBoardPost(post) {
+          if (!state.session.authenticated) return false;
+          return state.session.role === "owner" || isBoardPostOwnedByCurrentUser(post);
+        }
+
+        function canDeleteBoardReply(reply) {
+          if (state.session.role === "owner") return true;
+          const currentUid = String(state.session.uid || "");
+          const currentEmail = normalizeEmail(state.session.email);
+          return (
+            (reply.authorUid && currentUid && reply.authorUid === currentUid) ||
+            (normalizeEmail(reply.authorEmail) && normalizeEmail(reply.authorEmail) === currentEmail)
+          );
+        }
+
+        function getBoardReplyCount(post) {
+          return Array.isArray(post.replies) ? post.replies.length : 0;
+        }
+
+        function hasAdminBoardReply(post) {
+          return (Array.isArray(post.replies) ? post.replies : []).some((reply) => reply.byAdmin);
         }
 
         function mergeBoardPosts(...collections) {
@@ -3948,6 +4114,94 @@
           await boardSyncPromise;
         }
 
+        function updateBoardPostRepliesLocally(postId, updater) {
+          setState((prev) => ({
+            ...prev,
+            apps: {
+              ...prev.apps,
+              board: {
+                ...prev.apps.board,
+                posts: prev.apps.board.posts.map((post) =>
+                  post.id === postId
+                    ? { ...post, replies: updater(Array.isArray(post.replies) ? post.replies : []) }
+                    : post
+                ),
+              },
+            },
+          }));
+        }
+
+        async function addBoardReply(post, content) {
+          const now = new Date();
+          const createdAt =
+            now.getFullYear() +
+            "-" +
+            String(now.getMonth() + 1).padStart(2, "0") +
+            "-" +
+            String(now.getDate()).padStart(2, "0") +
+            " " +
+            String(now.getHours()).padStart(2, "0") +
+            ":" +
+            String(now.getMinutes()).padStart(2, "0");
+
+          const reply = {
+            id: "reply-" + now.getTime(),
+            content: content.trim(),
+            author: getBoardAuthorName(),
+            authorEmail: normalizeEmail(state.session.email),
+            authorUid: String(state.session.uid || ""),
+            createdAt,
+            createdAtMs: now.getTime(),
+            byAdmin: state.session.role === "owner",
+          };
+
+          if (firebaseServices.db && firebaseServices.auth?.currentUser) {
+            try {
+              // arrayUnion 으로 덧붙여 동시 작성 시 서로 덮어쓰지 않게 한다.
+              await firebaseServices.db
+                .collection(BOARD_COLLECTION)
+                .doc(post.id)
+                .update({
+                  replies: firebase.firestore.FieldValue.arrayUnion(reply),
+                });
+              await syncBoardPostsFromCloud();
+            } catch (error) {
+              console.error("Board reply save failed:", error);
+              pushToast("자유게시판", "답글 저장에 실패했습니다. Firestore 규칙을 확인하세요.");
+              return false;
+            }
+          } else {
+            updateBoardPostRepliesLocally(post.id, (replies) => [...replies, reply]);
+          }
+
+          pushToast("자유게시판", "답글을 등록했습니다.");
+          return true;
+        }
+
+        async function deleteBoardReply(post, reply) {
+          const remaining = (Array.isArray(post.replies) ? post.replies : []).filter(
+            (item) => item.id !== reply.id
+          );
+
+          if (firebaseServices.db && firebaseServices.auth?.currentUser) {
+            try {
+              await firebaseServices.db
+                .collection(BOARD_COLLECTION)
+                .doc(post.id)
+                .update({ replies: remaining });
+              await syncBoardPostsFromCloud();
+            } catch (error) {
+              console.error("Board reply delete failed:", error);
+              pushToast("자유게시판", "답글 삭제에 실패했습니다.");
+              return;
+            }
+          } else {
+            updateBoardPostRepliesLocally(post.id, () => remaining);
+          }
+
+          pushToast("자유게시판", "답글을 삭제했습니다.");
+        }
+
         function getBoardAuthorName() {
           if (state.session.role === "owner") return "운영자";
           if (state.session.name) return state.session.name;
@@ -4037,6 +4291,13 @@
             const categoryTd = document.createElement("td");
             categoryTd.className = "board-col-category";
             categoryTd.appendChild(createBoardCategoryBadge(post.category));
+            if (post.category === "질문") {
+              const answered = hasAdminBoardReply(post);
+              const answerBadge = document.createElement("span");
+              answerBadge.className = "board-answer-badge " + (answered ? "done" : "waiting");
+              answerBadge.textContent = answered ? "답변완료" : "미답변";
+              categoryTd.appendChild(answerBadge);
+            }
 
             const titleTd = document.createElement("td");
             const titleButton = document.createElement("button");
@@ -4045,6 +4306,14 @@
             titleButton.textContent = post.title;
             if (post.isPrivate) {
               titleButton.prepend(document.createTextNode("[비공개] "));
+            }
+            const replyCount = getBoardReplyCount(post);
+            if (replyCount > 0) {
+              const countMark = document.createElement("span");
+              countMark.className = "board-reply-count";
+              countMark.textContent = replyCount;
+              titleButton.appendChild(document.createTextNode(" "));
+              titleButton.appendChild(countMark);
             }
             titleButton.addEventListener("click", () => {
               if (!canOpenBoardPost(post)) return;
@@ -4410,8 +4679,126 @@
             actions.appendChild(deleteButton);
           }
 
-          card.append(title, meta, content, actions);
+          card.append(title, meta, content, actions, createBoardReplySection(post));
           return card;
+        }
+
+        function createBoardReplySection(post) {
+          const section = document.createElement("div");
+          section.className = "board-reply-section";
+
+          const replies = Array.isArray(post.replies) ? post.replies : [];
+
+          const heading = document.createElement("h4");
+          heading.className = "board-reply-heading";
+          heading.textContent = "답글";
+          const countChip = document.createElement("span");
+          countChip.className = "board-reply-count";
+          countChip.textContent = replies.length + "개";
+          heading.appendChild(countChip);
+          section.appendChild(heading);
+
+          if (replies.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "board-empty";
+            empty.textContent = "아직 등록된 답글이 없습니다.";
+            section.appendChild(empty);
+          } else {
+            const list = document.createElement("div");
+            list.className = "board-reply-list";
+            replies.forEach((reply) => list.appendChild(createBoardReplyItem(post, reply)));
+            section.appendChild(list);
+          }
+
+          if (canReplyToBoardPost(post)) {
+            section.appendChild(createBoardReplyForm(post));
+          } else {
+            const locked = document.createElement("div");
+            locked.className = "board-reply-locked";
+            locked.textContent = "답글은 운영자와 글 작성자만 등록할 수 있습니다.";
+            section.appendChild(locked);
+          }
+
+          return section;
+        }
+
+        function createBoardReplyItem(post, reply) {
+          const item = document.createElement("article");
+          item.className = "board-reply-item" + (reply.byAdmin ? " admin" : "");
+
+          const meta = document.createElement("div");
+          meta.className = "board-reply-meta";
+
+          const author = document.createElement("span");
+          author.className = "board-reply-author";
+          author.textContent = reply.author;
+          meta.appendChild(author);
+
+          if (reply.byAdmin) {
+            meta.appendChild(createChip("운영자"));
+          }
+
+          const date = document.createElement("span");
+          date.className = "board-reply-date";
+          date.textContent = reply.createdAt;
+          meta.appendChild(date);
+
+          if (canDeleteBoardReply(reply)) {
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "board-reply-delete";
+            remove.textContent = "삭제";
+            remove.addEventListener("click", async () => {
+              remove.disabled = true;
+              await deleteBoardReply(post, reply);
+            });
+            meta.appendChild(remove);
+          }
+
+          const content = document.createElement("div");
+          content.className = "board-reply-content";
+          content.textContent = reply.content;
+
+          item.append(meta, content);
+          return item;
+        }
+
+        function createBoardReplyForm(post) {
+          const form = document.createElement("form");
+          form.className = "board-reply-form";
+
+          const label = document.createElement("label");
+          label.textContent =
+            state.session.role === "owner" ? "운영자 답변" : "답글";
+          const input = document.createElement("textarea");
+          input.required = true;
+          input.placeholder =
+            state.session.role === "owner"
+              ? "질문에 대한 답변을 입력하세요"
+              : "추가로 남길 내용을 입력하세요";
+          label.appendChild(input);
+
+          const actions = document.createElement("div");
+          actions.className = "inline-actions";
+          const submit = document.createElement("button");
+          submit.type = "submit";
+          submit.className = "button";
+          submit.textContent = "답글 등록";
+          actions.appendChild(submit);
+
+          form.append(label, actions);
+          form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            if (!input.value.trim()) return;
+            submit.disabled = true;
+            const saved = await addBoardReply(post, input.value);
+            if (saved) {
+              input.value = "";
+            }
+            submit.disabled = false;
+          });
+
+          return form;
         }
 
         function renderTasksApp() {
