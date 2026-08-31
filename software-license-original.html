@@ -1041,12 +1041,13 @@
                                         <td className="px-4 py-4 whitespace-nowrap">
                                             {status ? <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap ${status.cls}`}>{status.label}</span> : <span className="text-xs text-gray-300">-</span>}
                                         </td>
-                                        <td className="px-4 py-4 text-xs text-gray-500 whitespace-nowrap">
-                                            <div className="font-medium text-gray-700">~ {l.expiryDate || '-'}</div>
-                                            <div className="text-[10px] text-gray-400">시작 {l.startDate || '-'}</div>
+                                        <td className="px-4 py-4 text-xs text-gray-500">
+                                            <div className="font-medium text-gray-700 whitespace-nowrap">~ {l.expiryDate || '-'}</div>
+                                            <div className="text-[10px] text-gray-400 whitespace-nowrap">시작 {l.startDate || '-'}</div>
                                             {l.autoRenew && (
                                                 <div className="text-[10px] mt-1 font-bold text-amber-600">
-                                                    자동갱신 · 통보 {notice || '-'}
+                                                    <div>자동갱신</div>
+                                                    <div className="whitespace-nowrap">통보 {notice || '-'}</div>
                                                 </div>
                                             )}
                                             {actionDDay !== null && actionDDay >= 0 && actionDDay <= 30 && (
