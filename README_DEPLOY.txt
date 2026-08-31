@@ -17,6 +17,7 @@ OfficeFlow One 배포 폴더
   - vehicle-log-original.html
   - fixed-assets-original.html
   - travel-manager-original.html
+  - software-license-original.html
 
 같이 포함한 참고 파일:
 - firestore.rules

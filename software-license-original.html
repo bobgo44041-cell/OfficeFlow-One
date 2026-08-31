@@ -1,0 +1,1521 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>소프트웨어 라이선스 관리 (SLMS)</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- OfficeFlow One 세션 브릿지 -->
+    <script>
+        const OFFICEFLOW_STORAGE_KEY = 'officeflow-one-embed-session';
+        const LEGACY_OFFICEFLOW_STORAGE_KEY = 'officeflow-one-mvp-state';
+
+        function getOfficeFlowState() {
+            try {
+                const raw =
+                    window.localStorage.getItem(OFFICEFLOW_STORAGE_KEY) ||
+                    window.localStorage.getItem(LEGACY_OFFICEFLOW_STORAGE_KEY);
+                if (raw) return JSON.parse(raw);
+            } catch (error) {}
+
+            return null;
+        }
+
+        const officeflowState = getOfficeFlowState();
+        const officeflowSession = officeflowState?.session?.authenticated ? officeflowState.session : null;
+        const officeflowUid = String(officeflowSession?.uid || '').trim();
+        const officeflowEmail = String(officeflowSession?.email || '').toLowerCase();
+        const licenseUserKey = (officeflowUid || officeflowEmail || 'guest').replace(/[^a-z0-9]+/gi, '_');
+
+        // 허브 로그인 사용자별로 데이터를 분리한다. firestore.rules 의
+        // ownsApp(appId, 'ofw-software-license') 규칙과 짝을 이룬다.
+        window.licenseAppId = `ofw-software-license-${licenseUserKey}`;
+        window.officeflowSessionInfo = { uid: officeflowUid, email: officeflowEmail, authenticated: Boolean(officeflowSession) };
+    </script>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, getDocs, onSnapshot, doc, deleteDoc, updateDoc, query, orderBy, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
+
+        // 모든 문서는 artifacts/{licenseAppId}/public/data/{컬렉션} 아래에 저장된다.
+        const scopedSegments = (col) => ['artifacts', window.licenseAppId, 'public', 'data', col];
+        const licenseCollection = (db, col) => collection(db, ...scopedSegments(col));
+        const licenseDoc = (db, col, id) => doc(db, ...scopedSegments(col), id);
+
+        window.firebaseModules = {
+            initializeApp, getAuth, onAuthStateChanged,
+            getFirestore, collection, addDoc, getDocs, onSnapshot, doc, deleteDoc, updateDoc, query, orderBy, setDoc, getDoc,
+            getAnalytics,
+            licenseCollection, licenseDoc
+        };
+
+        window.userFirebaseConfig = {
+            apiKey: "AIzaSyBfT58Y9XwjalTk0E0NPBWqkVVVOWN9zFQ",
+            authDomain: "officeflow-one.firebaseapp.com",
+            projectId: "officeflow-one",
+            storageBucket: "officeflow-one.firebasestorage.app",
+            messagingSenderId: "1084176732785",
+            appId: "1:1084176732785:web:56e241ddcdb69afdf101d0",
+            measurementId: "G-SYP4NQMGP7"
+        };
+    </script>
+
+    <style>
+        body { background-color: #f3f4f6; font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; }
+        .glass-panel { background: white; border: 1px solid #e5e7eb; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); border-radius: 0.75rem; }
+        .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .spinner { border: 3px solid rgba(0, 0, 0, 0.1); border-radius: 50%; border-top: 3px solid #3b82f6; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .custom-checkbox:checked { background-color: #10b981; border-color: #10b981; }
+        .custom-scroll::-webkit-scrollbar { width: 6px; }
+        .custom-scroll::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+        .sort-icon::after { content: '↕'; font-size: 0.7em; margin-left: 4px; opacity: 0.3; }
+        .sort-asc::after { content: '↑'; opacity: 1; color: #2563eb; }
+        .sort-desc::after { content: '↓'; opacity: 1; color: #2563eb; }
+        
+        /* Tooltip */
+        .tooltip-container { position: relative; }
+        .tooltip-text { visibility: hidden; width: 220px; background-color: #333; color: #fff; text-align: center; border-radius: 6px; padding: 8px; position: absolute; z-index: 10; bottom: 125%; left: 50%; margin-left: -110px; opacity: 0; transition: opacity 0.3s; font-size: 0.75rem; pointer-events: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .tooltip-container:hover .tooltip-text { visibility: visible; opacity: 1; }
+        .tooltip-text::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px; border-width: 5px; border-style: solid; border-color: #333 transparent transparent transparent; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- Icons ---
+        const Icons = {
+            Dashboard: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>,
+            Users: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>,
+            License: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>,
+            Link: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>,
+            Trash: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>,
+            Alert: () => <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>,
+            XMark: () => <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>,
+            Check: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>,
+            Settings: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>,
+            Lock: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>,
+            Edit: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>,
+            Search: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>,
+            PieChart: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" /></svg>,
+            Briefcase: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>,
+            Ghost: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z" /></svg>,
+            CloudOff: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" /></svg>,
+            Download: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>,
+            Refresh: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>,
+            CreditCard: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>,
+            Filter: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>,
+            Info: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        };
+
+        // --- Utils ---
+        const downloadCSV = (data, filename) => {
+            const bom = "\uFEFF";
+            const csvContent = bom + data.map(e => e.join(",")).join("\n");
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+
+        const parseCSV = (rawText) => {
+            const text = String(rawText || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            const lines = text.split('\n').filter(line => line.trim() !== '');
+            if (lines.length === 0) return [];
+
+            const parseLine = (line) => {
+                const result = [];
+                let current = '';
+                let inQuotes = false;
+
+                for (let i = 0; i < line.length; i++) {
+                    const ch = line[i];
+                    if (ch === '"') {
+                        if (inQuotes && line[i + 1] === '"') {
+                            current += '"';
+                            i++;
+                        } else {
+                            inQuotes = !inQuotes;
+                        }
+                    } else if (ch === ',' && !inQuotes) {
+                        result.push(current);
+                        current = '';
+                    } else {
+                        current += ch;
+                    }
+                }
+                result.push(current);
+                return result.map(cell => cell.replace(/^\uFEFF/, '').trim());
+            };
+
+            return lines.map(parseLine);
+        };
+
+        const getSortClass = (key, currentConfig) => {
+            if (currentConfig.key !== key) return "sort-icon cursor-pointer hover:bg-gray-100 select-none";
+            return `sort-icon cursor-pointer hover:bg-gray-100 select-none ${currentConfig.direction === 'asc' ? 'sort-asc' : 'sort-desc'}`;
+        };
+
+        // Custom Sort: Hangul Priority > English/Others
+        const koreanSort = (a, b, key, direction) => {
+            const valA = String(a[key] || '').trim();
+            const valB = String(b[key] || '').trim();
+            
+            const isHangul = (text) => /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(text);
+            const isHangulA = isHangul(valA);
+            const isHangulB = isHangul(valB);
+
+            let comparison = 0;
+            
+            if (isHangulA && !isHangulB) {
+                comparison = -1; 
+            } else if (!isHangulA && isHangulB) {
+                comparison = 1;
+            } else {
+                comparison = valA.localeCompare(valB, 'ko', { numeric: true });
+            }
+
+            return direction === 'asc' ? comparison : -comparison;
+        };
+
+        // --- Custom Hook ---
+        function useFirebase() {
+            const [services, setServices] = useState(null);
+            const [user, setUser] = useState(null);
+            const [errorMsg, setErrorMsg] = useState('');
+
+            useEffect(() => {
+                let mounted = true;
+                const init = async () => {
+                    const sdkTimeout = setTimeout(() => {
+                        if (mounted && !window.firebaseModules) {
+                            setErrorMsg("Firebase SDK 로딩 시간 초과 (네트워크/차단 확인 필요)");
+                        }
+                    }, 5000);
+
+                    while (!window.firebaseModules) {
+                        await new Promise(r => setTimeout(r, 100));
+                        if (!mounted) return;
+                    }
+                    clearTimeout(sdkTimeout);
+
+                    const { initializeApp, getAuth, onAuthStateChanged, getFirestore, getAnalytics } = window.firebaseModules;
+                    const firebaseConfig = window.userFirebaseConfig;
+
+                    try {
+                        const connTimeout = setTimeout(() => {
+                            if (mounted && !user) {
+                                setErrorMsg("서버 연결 응답 없음 (네트워크 방화벽 이슈 또는 로그인 세션 만료)");
+                            }
+                        }, 10000);
+
+                        if (!window._firebaseAppInstance) {
+                            window._firebaseAppInstance = initializeApp(firebaseConfig);
+                        }
+                        const app = window._firebaseAppInstance;
+                        const auth = getAuth(app);
+                        const db = getFirestore(app);
+                        try { getAnalytics(app); } catch(e) {}
+
+                        // OfficeFlow One 허브에서 이미 Google 로그인한 세션을 그대로 승계한다.
+                        // 별도 익명 로그인은 하지 않는다 (허브는 Google 로그인만 허용).
+                        onAuthStateChanged(auth, (u) => {
+                            if (!mounted) return;
+                            clearTimeout(connTimeout);
+                            if (u) {
+                                setUser(u);
+                                setServices({ db, auth });
+                            } else {
+                                setErrorMsg("OfficeFlow One 로그인 세션을 찾지 못했습니다. 허브에서 Google 로그인 후 다시 실행해 주세요.");
+                            }
+                        }, (err) => {
+                            clearTimeout(connTimeout);
+                            setErrorMsg(`인증 오류: ${err.message}`);
+                        });
+
+                    } catch (err) {
+                        console.error("Firebase init failed", err);
+                        setErrorMsg(`초기화 오류: ${err.message}. Project ID(${firebaseConfig.projectId})가 유효한지 확인하세요.`);
+                    }
+                };
+                init();
+                return () => { mounted = false; };
+            }, []);
+
+            return { services, user, errorMsg };
+        }
+
+        // --- UI Components ---
+        function NavButton({ active, onClick, icon, label }) {
+            return (
+                <button onClick={onClick} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all ${active ? 'bg-blue-600 text-white shadow-md' : 'text-slate-300 hover:bg-slate-700 hover:text-white'}`}>
+                    {icon}<span className="font-medium">{label}</span>
+                </button>
+            );
+        }
+
+        function StatCard({ title, value, subtext, color="blue", alert=false, onClick, actionIcon }) {
+            const borderColorClassMap = {
+                blue: 'border-blue-500',
+                indigo: 'border-indigo-500',
+                purple: 'border-purple-500',
+                emerald: 'border-emerald-500',
+                orange: 'border-orange-500',
+                gray: 'border-gray-500'
+            };
+            const borderColorClass = borderColorClassMap[color] || borderColorClassMap.blue;
+            return (
+                <div onClick={onClick} className={`glass-panel p-6 border-l-4 ${alert ? 'border-red-500' : borderColorClass} ${onClick ? 'cursor-pointer hover:bg-gray-50 transition-colors group tooltip-container' : ''} relative`}>
+                    <div className="flex justify-between items-start">
+                        <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">{title}</h3>
+                        {onClick && <span className="text-gray-400 group-hover:text-blue-500 transition-colors">{actionIcon || <Icons.Info/>}</span>}
+                    </div>
+                    <div className="mt-2"><span className={`text-3xl font-bold ${alert ? 'text-red-600' : 'text-gray-900'}`}>{value}</span></div>
+                    {subtext && <p className="mt-1 text-sm text-gray-400">{subtext}</p>}
+                    {onClick && <div className="tooltip-text">연간 결제는 12로 나누어 월 예상 금액에 합산됩니다. (월간 명시된 항목 제외 모두 연간으로 간주)</div>}
+                </div>
+            );
+        }
+
+        // OfficeFlow One 통합판에서는 Firebase 연결 정보를 앱에서 바꿀 수 없다.
+        // 항상 officeflow-one 프로젝트에 붙고, 데이터는 로그인 계정별로 분리된다.
+        function SetupBanner() {
+            return (
+                <div className="bg-amber-100 border-b border-amber-200 text-amber-900 px-4 py-3 flex items-center justify-between shadow-sm">
+                    <div className="flex items-center gap-3"><div className="text-amber-600"><Icons.CloudOff /></div><p className="text-sm font-bold">데모 모드 (클라우드 연결 안 됨 · 이 브라우저에서만 임시 저장)</p></div>
+                    <button onClick={() => window.location.reload()} className="text-xs bg-white border border-amber-300 px-3 py-1 rounded hover:bg-amber-50">다시 연결</button>
+                </div>
+            );
+        }
+
+        function LoginScreen({ onLogin }) {
+            const [password, setPassword] = useState('');
+            const [error, setError] = useState('');
+            const [checking, setChecking] = useState(false);
+            const handleSubmit = async (e) => {
+                e.preventDefault(); setChecking(true); setError('');
+                const isValid = await onLogin(password);
+                if (!isValid) { setError('비밀번호가 올바르지 않습니다.'); setChecking(false); }
+            };
+            return (
+                <div className="flex flex-col items-center justify-center h-screen bg-slate-900 text-white">
+                    <div className="w-full max-w-md p-8 bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl border border-white/10 animate-fade-in">
+                        <div className="text-center mb-8"><h1 className="text-3xl font-bold mb-2">SLMS</h1><p className="text-slate-300 text-sm">Software License Management System</p></div>
+                        <form onSubmit={handleSubmit} className="space-y-6">
+                            <input type="password" className="w-full bg-slate-800 border border-slate-600 rounded-lg py-3 px-4 outline-none focus:ring-2 focus:ring-blue-500" placeholder="비밀번호 입력" value={password} onChange={e=>setPassword(e.target.value)} autoFocus />
+                            {error && <p className="text-red-400 text-xs text-center">{error}</p>}
+                            <button type="submit" disabled={checking} className="w-full bg-blue-600 py-3 rounded-lg font-bold hover:bg-blue-500 transition-colors">{checking ? '확인 중...' : '접속하기'}</button>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        function CostDetailModal({ licenses, onClose }) {
+            const details = useMemo(() => {
+                return licenses
+                    .filter(l => l.type === 'Subscription')
+                    .map(l => {
+                        const cost = parseInt(l.cost) || 0;
+                        // [FIXED] 'Monthly'가 아니면 모두 'Yearly'로 간주하여 12로 나눔 (안전한 기본값 처리)
+                        const isMonthly = l.paymentCycle === 'Monthly';
+                        const monthlyCost = isMonthly ? cost : Math.round(cost / 12);
+                        return { ...l, monthlyCost, originalCost: cost, isMonthly };
+                    })
+                    .sort((a, b) => b.monthlyCost - a.monthlyCost);
+            }, [licenses]);
+
+            const total = details.reduce((acc, curr) => acc + curr.monthlyCost, 0);
+
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in" onClick={onClose}>
+                    <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full overflow-hidden flex flex-col max-h-[80vh]" onClick={e => e.stopPropagation()}>
+                        <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+                            <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2"><Icons.CreditCard /> 월 예상 구독 비용 산출 내역</h3>
+                            <button onClick={onClose} className="hover:bg-gray-200 p-1 rounded transition-colors"><Icons.XMark/></button>
+                        </div>
+                        <div className="p-4 bg-blue-50 text-sm text-blue-800 border-b border-blue-100">
+                            <p className="font-bold mb-1">💡 계산 방식 안내</p>
+                            <ul className="list-disc pl-5 space-y-1 text-xs">
+                                <li><strong>연간(Yearly) 결제:</strong> 입력된 금액 ÷ 12개월 (반올림)</li>
+                                <li><strong>월간(Monthly) 결제:</strong> 입력된 금액 그대로 합산</li>
+                                <li>* '월간'으로 명시되지 않은 모든 항목은 '연간'으로 간주하여 계산됩니다.</li>
+                            </ul>
+                        </div>
+                        <div className="flex-1 overflow-y-auto custom-scroll">
+                            <table className="w-full text-sm text-left">
+                                <thead className="bg-gray-100 text-xs uppercase text-gray-500 sticky top-0">
+                                    <tr>
+                                        <th className="p-3">SW 명</th>
+                                        <th className="p-3 text-center">결제 주기</th>
+                                        <th className="p-3 text-right">입력 금액 (총액)</th>
+                                        <th className="p-3 text-right text-blue-600 font-bold">월 환산 금액</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {details.map(item => (
+                                        <tr key={item.id} className="hover:bg-gray-50">
+                                            <td className="p-3 font-medium">{item.name}</td>
+                                            <td className="p-3 text-center">
+                                                <span className={`px-2 py-1 rounded text-xs ${!item.isMonthly ? 'bg-purple-100 text-purple-700' : 'bg-green-100 text-green-700'}`}>
+                                                    {!item.isMonthly ? '연간' : '월간'}
+                                                </span>
+                                            </td>
+                                            <td className="p-3 text-right text-gray-500">{item.originalCost.toLocaleString()}</td>
+                                            <td className="p-3 text-right font-bold text-gray-900">{item.monthlyCost.toLocaleString()}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="p-4 bg-gray-50 border-t flex justify-between items-center">
+                            <span className="text-sm text-gray-500">총 {details.length}개 항목 합계</span>
+                            <span className="text-xl font-bold text-emerald-600">₩{total.toLocaleString()}</span>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- Feature Screens ---
+        function DashboardPage({ users, licenses, assignments, onDownloadReport }) {
+            const [showCostDetail, setShowCostDetail] = useState(false);
+
+            // [FIXED] 정확한 월 구독 비용 계산 로직 적용 (수량 곱하기 제거, 총액 입력 가정)
+            // [LOGIC UPDATE] 'Monthly'가 아니면 무조건 'Yearly'로 취급 (데이터 누락 시 안전장치)
+            const totalCost = useMemo(() => licenses.reduce((acc, license) => {
+                if (license.type !== 'Subscription') return acc;
+                const cost = parseInt(license.cost) || 0;
+                
+                // 결제 주기가 'Monthly'가 아니면(Yearly이거나 undefined 등) 연간으로 간주하고 12로 나눔
+                if (license.paymentCycle !== 'Monthly') {
+                    return acc + Math.round(cost / 12);
+                } else {
+                    return acc + cost;
+                }
+            }, 0), [licenses]);
+
+            const totalSeats = useMemo(() => licenses.reduce((a, c) => a + (parseInt(c.seats)||0), 0), [licenses]);
+            const util = totalSeats > 0 ? Math.round((assignments.length / totalSeats) * 100) : 0;
+            
+            const expiringSoon = useMemo(() => {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const toDateOnly = (dateStr) => {
+                    if (!dateStr) return null;
+                    const d = new Date(`${dateStr}T00:00:00`);
+                    return Number.isNaN(d.getTime()) ? null : d;
+                };
+
+                return licenses
+                    .map(l => {
+                        const exp = toDateOnly(l.expiryDate);
+                        if (!exp) return null;
+                        const diffMs = exp.getTime() - today.getTime();
+                        const dDay = Math.floor(diffMs / 86400000);
+                        if (dDay < 0 || dDay > 30) return null;
+                        return { ...l, dDay, severity: dDay <= 7 ? 'critical' : 'warning' };
+                    })
+                    .filter(Boolean)
+                    .sort((a, b) => a.dDay - b.dDay);
+            }, [licenses]);
+
+            const deptStats = useMemo(() => {
+                const c = {};
+                assignments.forEach(a => { const u = users.find(x => x.id === a.userId); if (u?.dept) c[u.dept] = (c[u.dept] || 0) + 1; });
+                return Object.entries(c).sort((a,b) => b[1]-a[1]).slice(0, 5);
+            }, [assignments, users]);
+
+            const typeStats = useMemo(() => {
+                const c = { Subscription: 0, Perpetual: 0, Free: 0 };
+                licenses.forEach(l => { if(c[l.type] !== undefined) c[l.type]++; });
+                return c;
+            }, [licenses]);
+
+            const recent = useMemo(() => [...assignments].filter(a=>a.assignedAt).sort((a,b)=>new Date(b.assignedAt)-new Date(a.assignedAt)).slice(0, 5), [assignments]);
+            const unused = useMemo(() => licenses.filter(l => !assignments.some(a=>a.licenseId === l.id)).slice(0, 5), [licenses, assignments]);
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    {showCostDetail && <CostDetailModal licenses={licenses} onClose={() => setShowCostDetail(false)} />}
+                    
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <h2 className="text-2xl font-bold text-gray-800">현황 대시보드</h2>
+                        <button onClick={onDownloadReport} className="text-sm bg-slate-700 text-white px-3 py-1.5 rounded flex items-center gap-1 hover:bg-slate-800 w-fit">
+                            <Icons.Download /> 운영 리포트 CSV
+                        </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <StatCard title="등록된 인원" value={`${users.length}명`} subtext="전체 임직원" color="indigo" />
+                        <StatCard title="관리중인 SW" value={`${licenses.length}개`} subtext="활성 계약" color="purple" />
+                        
+                        {/* 상세 보기 클릭 기능 추가 */}
+                        <StatCard 
+                            title="월 예상 구독 비용" 
+                            value={`₩${totalCost.toLocaleString()}`} 
+                            subtext="클릭하여 산출 내역 보기" 
+                            color="emerald" 
+                            onClick={() => setShowCostDetail(true)}
+                            actionIcon={<Icons.PieChart/>}
+                        />
+                        
+                        <StatCard title="라이선스 활용률" value={`${util}%`} subtext={`${assignments.length}/${totalSeats} 시트`} color="orange" />
+                    </div>
+                    {expiringSoon.length > 0 && (
+                        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                            <h4 className="text-red-800 font-bold text-sm mb-2 flex items-center gap-2"><Icons.Alert/> 계약 만료 임박 (D-30)</h4>
+                            <div className="flex flex-wrap gap-2">
+                                {expiringSoon.map(l => (
+                                    <div key={l.id} className="bg-white px-3 py-1.5 rounded border border-red-100 text-xs shadow-sm">
+                                        <span className="font-bold text-gray-700 mr-2">{l.name}</span>
+                                        <span className="text-red-500 font-mono font-bold">{l.expiryDate}</span>
+                                        <span className={`ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold ${l.severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                                            D-{l.dDay}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="glass-panel p-6">
+                            <h3 className="font-bold text-gray-700 mb-4">라이선스 점유율</h3>
+                            <div className="space-y-4 max-h-60 overflow-y-auto pr-2 custom-scroll">
+                                {licenses.map(l => {
+                                    const u = assignments.filter(a => a.licenseId === l.id && users.some(user => user.id === a.userId)).length;
+                                    const p = Math.min((u/(parseInt(l.seats)||1))*100, 100);
+                                    return <div key={l.id}><div className="flex justify-between text-xs mb-1"><span>{l.name}</span><span className="text-gray-400">{u}/{l.seats}</span></div><div className="w-full bg-gray-200 rounded-full h-2"><div className={`h-2 rounded-full ${p>90?'bg-red-500':'bg-blue-500'}`} style={{width:`${p}%`}}></div></div></div>
+                                })}
+                            </div>
+                        </div>
+                        <div className="glass-panel p-6">
+                            <h3 className="font-bold text-gray-700 mb-4">최근 할당 내역</h3>
+                            <table className="min-w-full text-xs text-left">
+                                <thead><tr className="bg-gray-50 border-b"><th className="p-3">이름</th><th className="p-3">SW</th><th className="p-3 text-right">날짜</th></tr></thead>
+                                <tbody>{recent.map(a=>(<tr key={a.id} className="border-b last:border-0 hover:bg-gray-50"><td className="p-3 font-medium">{users.find(u=>u.id===a.userId)?.name}</td><td className="p-3">{licenses.find(l=>l.id===a.licenseId)?.name}</td><td className="p-3 text-right text-gray-400">{new Date(a.assignedAt).toLocaleDateString()}</td></tr>))}</tbody>
+                            </table>
+                            {recent.length === 0 && <p className="text-center text-xs text-gray-400 py-8">기록 없음</p>}
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="glass-panel p-6">
+                            <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><Icons.PieChart /> 부서별 활용 순위</h3>
+                            <div className="space-y-3">{deptStats.map(([d, c], index) => (<div key={d} className="flex justify-between items-center text-sm"><div className="flex items-center gap-2"><span className="w-5 h-5 bg-blue-50 text-blue-600 rounded flex items-center justify-center font-bold">{index+1}</span>{d}</div><span className="font-bold">{c}건</span></div>))}</div>
+                        </div>
+                        <div className="glass-panel p-6">
+                            <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><Icons.Briefcase /> 계약 형태 분포</h3>
+                            <div className="space-y-4 pt-2">
+                                <div className="flex justify-between text-sm"><span>구독형</span><span className="font-bold text-blue-600">{typeStats.Subscription}개</span></div>
+                                <div className="w-full bg-gray-100 h-1.5 rounded-full overflow-hidden"><div className="bg-blue-500 h-full" style={{width: `${(typeStats.Subscription / (licenses.length||1))*100}%`}}></div></div>
+                                <div className="flex justify-between text-sm"><span>영구형</span><span className="font-bold text-green-600">{typeStats.Perpetual}개</span></div>
+                                <div className="w-full bg-gray-100 h-1.5 rounded-full overflow-hidden"><div className="bg-green-500 h-full" style={{width: `${(typeStats.Perpetual / (licenses.length||1))*100}%`}}></div></div>
+                            </div>
+                        </div>
+                        <div className="glass-panel p-6 border-l-4 border-gray-300">
+                            <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><Icons.Ghost /> 유휴 라이선스</h3>
+                            <div className="space-y-2">{unused.map(l => (<div key={l.id} className="text-xs bg-gray-50 p-2 rounded flex justify-between border border-gray-100"><span>{l.name}</span><span className="text-emerald-600 font-bold">대기중</span></div>))}</div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function UserManagement({ users, onAdd, onDelete, onUpdate }) {
+            const [form, setForm] = useState({ name: '', dept: '' });
+            const [editId, setEditId] = useState(null);
+            const [bulkText, setBulkText] = useState('');
+            const [mode, setMode] = useState('single');
+            const [searchTerm, setSearchTerm] = useState('');
+            const [userSort, setUserSort] = useState({ key: 'name', direction: 'asc' });
+
+            const formRef = useRef(null); 
+            const nameInputRef = useRef(null);
+
+            const sortedUsers = useMemo(() => {
+                return [...users].sort((a, b) => koreanSort(a, b, userSort.key, userSort.direction));
+            }, [users, userSort]);
+            
+            const filteredUsers = useMemo(() => {
+                if (!searchTerm) return sortedUsers;
+                const lowerTerm = searchTerm.toLowerCase();
+                return sortedUsers.filter(u => 
+                    u.name.toLowerCase().includes(lowerTerm) || 
+                    (u.dept && u.dept.toLowerCase().includes(lowerTerm))
+                );
+            }, [sortedUsers, searchTerm]);
+
+            const handleSort = (key) => {
+                let direction = 'asc';
+                if (userSort.key === key && userSort.direction === 'asc') direction = 'desc';
+                setUserSort({ key, direction });
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault(); if(!form.name) return;
+                if(editId) { onUpdate(editId, form); setEditId(null); } else onAdd(form);
+                setForm({ name: '', dept: '' });
+            };
+            const handleBulk = async () => {
+                const lines = bulkText.split('\n');
+                for(let line of lines) { const [n,d] = line.split(/[,\t]/).map(s=>s.trim()); if(n) await onAdd({name:n, dept:d||''}); }
+                setBulkText(''); setMode('single');
+            };
+            const handleDownload = () => {
+                const data = [["이름", "부서", "가입일"], ...sortedUsers.map(u => [u.name, u.dept, u.createdAt])];
+                downloadCSV(data, "users_backup.csv");
+            };
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                        <h2 className="text-2xl font-bold text-gray-800 flex items-center">
+                            인원 등록/관리 
+                            <span className="ml-2 text-sm font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200">
+                                (총 {users.length}명)
+                            </span>
+                        </h2>
+                        <div className="flex gap-2 w-full md:w-auto justify-end">
+                            <div className="relative w-full md:w-64">
+                                <input 
+                                    type="text" 
+                                    placeholder="이름/부서 검색..." 
+                                    className="w-full pl-8 pr-3 py-1.5 text-sm border rounded outline-none focus:ring-2 focus:ring-blue-500"
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                />
+                                <span className="absolute left-2.5 top-2 text-gray-400"><Icons.Search /></span>
+                            </div>
+                            <button onClick={handleDownload} className="text-sm bg-green-600 text-white px-3 py-1.5 rounded flex items-center gap-1 hover:bg-green-700 whitespace-nowrap"><Icons.Download /> 엑셀</button>
+                        </div>
+                    </div>
+                    <div className="flex gap-6 flex-col lg:flex-row">
+                        <div ref={formRef} className="glass-panel p-6 w-full lg:w-1/3 h-fit transition-all duration-300">
+                            <div className="flex justify-between mb-4"><h3 className="font-semibold text-gray-700">{editId ? '사원 정보 수정' : (mode==='single'?'신규 등록':'일괄 등록')}</h3>
+                            {!editId && <div className="flex bg-gray-100 rounded p-1 text-xs"><button onClick={()=>setMode('single')} className={`px-2 py-1 rounded ${mode==='single'?'bg-white shadow font-bold':''}`}>개별</button><button onClick={()=>setMode('bulk')} className={`px-2 py-1 rounded ${mode==='bulk'?'bg-white shadow font-bold':''}`}>일괄</button></div>}</div>
+                            {mode==='single' ? (
+                                <form onSubmit={handleSubmit} className="space-y-4">
+                                    <input 
+                                        ref={nameInputRef}
+                                        className="w-full border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" 
+                                        placeholder="이름" 
+                                        value={form.name} 
+                                        onChange={e=>setForm({...form,name:e.target.value})} 
+                                        required
+                                    />
+                                    <input className="w-full border rounded px-3 py-2 text-sm outline-none" placeholder="부서" value={form.dept} onChange={e=>setForm({...form,dept:e.target.value})}/>
+                                    <button className={`w-full text-white py-2 rounded text-sm font-bold ${editId ? 'bg-indigo-600' : 'bg-blue-600'}`}>{editId ? '수정 저장' : '등록'}</button>
+                                    {editId && <button onClick={()=>{setEditId(null); setForm({name:'',dept:''})}} className="w-full text-xs text-gray-400">취소</button>}
+                                </form>
+                            ) : (
+                                <div className="space-y-4"><textarea className="w-full border rounded h-32 px-3 py-2 text-sm" placeholder="이름 [탭] 부서..." value={bulkText} onChange={e=>setBulkText(e.target.value)}/><button onClick={handleBulk} className="w-full bg-green-600 text-white py-2 rounded text-sm hover:bg-green-700">일괄 등록</button></div>
+                            )}
+                        </div>
+                        <div className="glass-panel flex-1 overflow-hidden">
+                            <table className="min-w-full text-sm text-left">
+                                <thead className="bg-gray-50 border-b">
+                                    <tr>
+                                        <th className={`p-4 ${getSortClass('name', userSort)}`} onClick={() => handleSort('name')}>이름</th>
+                                        <th className={`p-4 ${getSortClass('dept', userSort)}`} onClick={() => handleSort('dept')}>부서</th>
+                                        <th className="p-4 text-center">관리</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredUsers.length > 0 ? (
+                                        filteredUsers.map(u=>(<tr key={u.id} className="hover:bg-gray-50 border-b last:border-0"><td className="p-4 font-medium">{u.name}</td><td className="p-4 text-gray-600">{u.dept}</td><td className="p-4 flex justify-center gap-3">
+                                            <button onClick={()=>{
+                                                setEditId(u.id); 
+                                                setForm({name:u.name, dept:u.dept});
+                                                formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                                setTimeout(() => nameInputRef.current?.focus(), 300);
+                                            }} className="text-blue-400 hover:text-blue-600"><Icons.Edit/></button>
+                                            <button onClick={()=>onDelete(u.id)} className="text-red-300 hover:text-red-500"><Icons.Trash/></button></td></tr>))
+                                    ) : (
+                                        <tr><td colSpan="3" className="p-8 text-center text-gray-400">검색 결과가 없습니다.</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        function LicenseManagement({ licenses, assignments, users, onAdd, onDelete, onUpdate }) {
+            const [form, setForm] = useState({ name: '', type: 'Subscription', paymentCycle: 'Yearly', seats: 1, cost: 0, expiryDate: '' });
+            const [editId, setEditId] = useState(null);
+            const [viewingLicense, setViewingLicense] = useState(null);
+            
+            const [modalSearch, setModalSearch] = useState('');
+            const [modalSort, setModalSort] = useState({ key: 'assignedAt', direction: 'desc' });
+
+            const sortedLics = useMemo(() => [...licenses].sort((a, b) => a.name.localeCompare(b.name, 'ko')), [licenses]);
+            
+            const handleSubmit = (e) => {
+                e.preventDefault(); if(!form.name) return;
+                const submitData = { ...form };
+                if (submitData.type !== 'Subscription') {
+                    delete submitData.paymentCycle;
+                }
+                
+                if(editId) { onUpdate(editId, submitData); setEditId(null); } else onAdd(submitData);
+                setForm({ name: '', type: 'Subscription', paymentCycle: 'Yearly', seats: 1, cost: 0, expiryDate: '' });
+            };
+            
+            const handleDownload = () => {
+                const data = [["SW명", "계약형태", "결제주기", "수량", "비용", "만료일"], ...sortedLics.map(l => [l.name, l.type, l.type === 'Subscription' ? (l.paymentCycle === 'Monthly' ? '월' : '연') : '-', l.seats, l.cost, l.expiryDate])];
+                downloadCSV(data, "licenses_backup.csv");
+            };
+
+            const handleModalSort = (key) => {
+                let direction = 'asc';
+                if (modalSort.key === key && modalSort.direction === 'asc') direction = 'desc';
+                setModalSort({ key, direction });
+            };
+
+            const processedModalData = useMemo(() => {
+                if (!viewingLicense) return [];
+                
+                let data = assignments
+                    .filter(a => a.licenseId === viewingLicense.id)
+                    .map(a => {
+                        const u = users.find(user => user.id === a.userId);
+                        return u ? { ...a, userName: u.name, userDept: u.dept } : null;
+                    })
+                    .filter(item => item !== null);
+
+                if (modalSearch) {
+                    const lower = modalSearch.toLowerCase();
+                    data = data.filter(item => item.userName.toLowerCase().includes(lower) || (item.userDept && item.userDept.toLowerCase().includes(lower)));
+                }
+
+                data.sort((a, b) => {
+                    if (modalSort.key === 'assignedAt') {
+                        const valA = new Date(a.assignedAt || 0); 
+                        const valB = new Date(b.assignedAt || 0);
+                        return modalSort.direction === 'asc' ? valA - valB : valB - valA;
+                    } else {
+                        return koreanSort(a, b, modalSort.key, modalSort.direction);
+                    }
+                });
+
+                return data;
+            }, [viewingLicense, assignments, users, modalSearch, modalSort]);
+
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    {viewingLicense && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in" onClick={() => {setViewingLicense(null); setModalSearch('');}}>
+                            <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[80vh]" onClick={e => e.stopPropagation()}>
+                                <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+                                    <h3 className="font-bold text-lg text-gray-800">{viewingLicense.name} 사용자 목록</h3>
+                                    <button onClick={()=>{setViewingLicense(null); setModalSearch('');}} className="hover:bg-gray-200 p-1 rounded transition-colors"><Icons.XMark/></button>
+                                </div>
+                                <div className="p-3 border-b bg-white">
+                                    <div className="relative">
+                                        <input 
+                                            type="text" 
+                                            placeholder="이름 또는 부서 검색..." 
+                                            className="w-full pl-8 pr-3 py-2 text-sm border rounded bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                                            value={modalSearch}
+                                            onChange={(e) => setModalSearch(e.target.value)}
+                                        />
+                                        <span className="absolute left-2.5 top-2.5 text-gray-400"><Icons.Search/></span>
+                                    </div>
+                                </div>
+                                <div className="p-0 overflow-y-auto custom-scroll flex-1">
+                                    <table className="w-full text-sm text-left relative">
+                                        <thead className="bg-gray-100 sticky top-0 z-10 text-xs uppercase text-gray-500 font-semibold">
+                                            <tr>
+                                                <th className={`p-3 ${getSortClass('userName', modalSort)}`} onClick={() => handleModalSort('userName')}>이름</th>
+                                                <th className={`p-3 ${getSortClass('userDept', modalSort)}`} onClick={() => handleModalSort('userDept')}>부서</th>
+                                                <th className={`p-3 text-right ${getSortClass('assignedAt', modalSort)}`} onClick={() => handleModalSort('assignedAt')}>할당일</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {processedModalData.length > 0 ? (
+                                                processedModalData.map(item => (
+                                                    <tr key={item.id} className="hover:bg-blue-50 transition-colors">
+                                                        <td className="p-3 font-medium text-gray-900">{item.userName}</td>
+                                                        <td className="p-3 text-gray-500">{item.userDept}</td>
+                                                        <td className="p-3 text-right text-xs text-gray-400">
+                                                            {item.assignedAt ? new Date(item.assignedAt).toLocaleDateString() : '-'}
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                            ) : (
+                                                <tr><td colSpan="3" className="p-8 text-center text-gray-400">검색 결과가 없습니다.</td></tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div className="p-3 bg-gray-50 border-t text-xs text-right text-gray-500">
+                                    총 {processedModalData.length}명
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    <div className="flex justify-between items-center"><h2 className="text-2xl font-bold text-gray-800">라이선스 관리</h2>
+                    <button onClick={handleDownload} className="text-sm bg-green-600 text-white px-3 py-1.5 rounded flex items-center gap-1 hover:bg-green-700"><Icons.Download /> 엑셀 다운로드</button></div>
+                    <div className="flex gap-6 flex-col lg:flex-row">
+                        <div className="glass-panel p-6 w-full lg:w-1/3 h-fit">
+                            <h3 className="font-semibold text-gray-700 mb-4">{editId ? 'SW 정보 수정' : '신규 SW 등록'}</h3>
+                            <form onSubmit={handleSubmit} className="space-y-4">
+                                <input className="w-full border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" placeholder="SW 명" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} required/>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <select className="border rounded px-3 py-2 text-sm bg-white" value={form.type} onChange={e=>setForm({...form,type:e.target.value})}>
+                                        <option value="Subscription">구독 (Subscription)</option>
+                                        <option value="Perpetual">영구 (Perpetual)</option>
+                                        <option value="Network">네트워크 (Network)</option>
+                                        <option value="Volume">볼륨 (Volume)</option>
+                                        <option value="Free">무료 (Free)</option>
+                                    </select>
+                                    <input type="number" className="border rounded px-3 py-2 text-sm" placeholder="수량" value={form.seats} onChange={e=>setForm({...form,seats:parseInt(e.target.value)||1})}/>
+                                </div>
+
+                                {form.type === 'Subscription' && (
+                                    <div className="bg-blue-50 p-2 rounded border border-blue-100 animate-fade-in">
+                                        <label className="text-[10px] font-bold text-blue-600 block mb-1 flex items-center gap-1"><Icons.CreditCard /> 결제 주기 설정</label>
+                                        <div className="flex gap-4">
+                                            <label className="flex items-center gap-2 text-sm cursor-pointer">
+                                                <input type="radio" name="cycle" className="custom-checkbox" checked={form.paymentCycle === 'Monthly'} onChange={()=>setForm({...form, paymentCycle: 'Monthly'})} />
+                                                월 정산
+                                            </label>
+                                            <label className="flex items-center gap-2 text-sm cursor-pointer">
+                                                <input type="radio" name="cycle" className="custom-checkbox" checked={form.paymentCycle !== 'Monthly'} onChange={()=>setForm({...form, paymentCycle: 'Yearly'})} />
+                                                연 정산
+                                            </label>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <input type="number" className="w-full border rounded px-3 py-2 text-sm" placeholder="단가 (원)" value={form.cost} onChange={e=>setForm({...form,cost:parseInt(e.target.value)||0})}/>
+                                <div><label className="text-[10px] text-gray-400 ml-1">계약 만료일</label><input type="date" className="w-full border rounded px-3 py-2 text-sm" value={form.expiryDate} onChange={e=>setForm({...form,expiryDate:e.target.value})}/></div>
+                                <button className="w-full bg-purple-600 text-white py-2 rounded font-bold">{editId ? '수정 저장' : '추가'}</button>
+                                {editId && <button onClick={()=>{setEditId(null); setForm({name:'',type:'Subscription',paymentCycle:'Yearly',seats:1,cost:0,expiryDate:''})}} className="w-full text-xs text-gray-400">취소</button>}
+                            </form>
+                        </div>
+                        <div className="glass-panel flex-1 overflow-hidden">
+                            <table className="min-w-full text-sm text-left"><thead className="bg-gray-50 border-b"><tr><th>SW 명 (가나다순)</th><th>형태</th><th>비용(주기)</th><th>현황</th><th>만료일</th><th className="text-center">관리</th></tr></thead>
+                                <tbody>{sortedLics.map(l=>{
+                                    const uCount = assignments.filter(a => a.licenseId === l.id && users.some(u => u.id === a.userId)).length;
+                                    return (<tr key={l.id} className="hover:bg-gray-50 border-b">
+                                        <td className="px-4 py-4">{l.name}</td>
+                                        <td className="px-4 py-4">{l.type}</td>
+                                        <td className="px-4 py-4 text-xs">
+                                            {l.cost.toLocaleString()}
+                                            {l.type === 'Subscription' ? <span className="text-gray-400 ml-1">({l.paymentCycle === 'Monthly' ? '월' : '연'})</span> : ''}
+                                            {/* [FIXED] 'Monthly'가 아니면 무조건 월 환산 금액 표시 (데이터 누락 대비) */}
+                                            {l.type === 'Subscription' && l.paymentCycle !== 'Monthly' && (
+                                                <div className="text-[10px] text-blue-600 mt-1 font-bold">
+                                                    ≈ 월 {Math.round(l.cost/12).toLocaleString()}원
+                                                </div>
+                                            )}
+                                        </td>
+                                        <td className="px-4 py-4 cursor-pointer font-bold text-blue-600 hover:text-blue-800 hover:underline transition-colors" onClick={()=>setViewingLicense(l)}>{uCount}/{l.seats}</td>
+                                        <td className="px-4 py-4 text-xs text-gray-500">{l.expiryDate || '-'}</td>
+                                        <td className="px-4 py-4 flex justify-center gap-3"><button onClick={()=>{setEditId(l.id); setForm({...l, paymentCycle: l.paymentCycle || 'Yearly'})}} className="text-blue-400"><Icons.Edit/></button><button onClick={()=>onDelete(l.id)} className="text-red-300"><Icons.Trash/></button></td>
+                                    </tr>)
+                                })}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const AssignmentManagement = ({ users, licenses, assignments, onAssign, onUnassign }) => {
+            const [selUser, setSelUser] = useState('');
+            const [selLics, setSelLics] = useState(new Set());
+            const [userSearch, setUserSearch] = useState('');
+            const [listSearch, setListSearch] = useState('');
+            const [listSort, setListSort] = useState({ key: 'name', direction: 'asc' });
+            const [recommendSort, setRecommendSort] = useState(true);
+
+            const sortedLics = useMemo(() => [...licenses].sort((a,b)=>a.name.localeCompare(b.name, 'ko')), [licenses]);
+            const sortedLicsForPanel = useMemo(() => {
+                if (!recommendSort) return sortedLics;
+                return [...sortedLics].sort((a, b) => {
+                    const aUsed = assignments.filter(x => x.licenseId === a.id && users.some(u => u.id === x.userId)).length;
+                    const bUsed = assignments.filter(x => x.licenseId === b.id && users.some(u => u.id === x.userId)).length;
+                    const aRemain = (parseInt(a.seats) || 0) - aUsed;
+                    const bRemain = (parseInt(b.seats) || 0) - bUsed;
+                    if (bRemain !== aRemain) return bRemain - aRemain;
+                    return a.name.localeCompare(b.name, 'ko');
+                });
+            }, [recommendSort, sortedLics, assignments, users]);
+            const filteredUsersForSelect = useMemo(() => {
+                const term = userSearch.toLowerCase();
+                return users
+                    .filter(u =>
+                        (u.name || '').toLowerCase().includes(term) ||
+                        (u.dept || '').toLowerCase().includes(term)
+                    )
+                    .sort((a,b)=>a.name.localeCompare(b.name, 'ko'));
+            }, [users, userSearch]);
+            const grouped = useMemo(() => { const g={}; assignments.forEach(a=>{if(!g[a.userId])g[a.userId]=[]; g[a.userId].push(a)}); return g; }, [assignments]);
+            
+            const displayedUserIds = useMemo(() => {
+                let ids = Object.keys(grouped).filter(uid => { 
+                    const u = users.find(u => u.id === uid);
+                    if (!u) return false;
+                    
+                    const lowerSearch = listSearch.toLowerCase();
+                    if ((u.name || '').toLowerCase().includes(lowerSearch) || (u.dept || '').toLowerCase().includes(lowerSearch)) return true;
+                    
+                    const userAssignments = grouped[uid] || [];
+                    const hasSW = userAssignments.some(a => {
+                        const lName = licenses.find(l => l.id === a.licenseId)?.name;
+                        return lName && lName.toLowerCase().includes(lowerSearch);
+                    });
+                    
+                    return hasSW;
+                });
+
+                ids.sort((a, b) => {
+                    const uA = users.find(u => u.id === a);
+                    const uB = users.find(u => u.id === b);
+                    if (!uA || !uB) return 0;
+                    
+                    return koreanSort(uA, uB, listSort.key, listSort.direction);
+                });
+
+                return ids;
+            }, [grouped, users, listSearch, licenses, listSort]);
+
+            const handleAssign = async () => {
+                let success = 0;
+                const failed = [];
+                for (let lid of selLics) {
+                    const result = await onAssign({ userId: selUser, licenseId: lid });
+                    if (result && result.ok === false) failed.push(result.message || '알 수 없는 오류');
+                    else success++;
+                }
+                setSelLics(new Set());
+                if (failed.length > 0) {
+                    alert(`할당 완료 ${success}건 / 실패 ${failed.length}건\n- ${failed.slice(0, 5).join('\n- ')}`);
+                }
+            };
+            const toggleLic = (l, assigned, full) => {
+                if(assigned) { const target = assignments.find(a=>a.userId===selUser&&a.licenseId===l.id); if(target && confirm(`${l.name} 라이선스를 회수하시겠습니까?`)) onUnassign(target.id); }
+                else if(!full) { const s=new Set(selLics); s.has(l.id)?s.delete(l.id):s.add(l.id); setSelLics(s); }
+                else alert(`${l.name}은(는) 가용 수량이 없습니다.`);
+            };
+            const handleSort = (key) => {
+                let direction = 'asc';
+                if (listSort.key === key && listSort.direction === 'asc') direction = 'desc';
+                setListSort({ key, direction });
+            };
+
+            const handleDownload = () => {
+                const data = [["사용자", "부서", "보유 SW"]];
+                displayedUserIds.forEach(uid => {
+                    const u = users.find(u => u.id === uid);
+                    if (u) {
+                        const swList = (grouped[uid] || [])
+                            .map(a => licenses.find(l => l.id === a.licenseId)?.name || '')
+                            .filter(name => name !== '')
+                            .sort((a, b) => a.localeCompare(b, 'ko'))
+                            .join(", ");
+                        data.push([u.name, u.dept, swList]);
+                    }
+                });
+                downloadCSV(data, "assignments_backup.csv");
+            };
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex justify-between items-end"><h2 className="text-2xl font-bold">매칭 현황</h2>
+                    <div className="flex gap-2">
+                        <button onClick={handleDownload} className="text-sm bg-green-600 text-white px-3 py-1.5 rounded flex items-center gap-1 hover:bg-green-700"><Icons.Download /> 엑셀 다운로드</button>
+                        <div className="relative"><input type="text" placeholder="사용자 또는 SW명 검색..." className="pl-8 pr-3 py-1.5 text-sm border rounded outline-none focus:ring-2 focus:ring-blue-500 w-64" value={listSearch} onChange={e=>setListSearch(e.target.value)} /><span className="absolute left-2.5 top-2 text-gray-400"><Icons.Search /></span></div>
+                    </div></div>
+                    <div className="glass-panel p-6">
+                        <div className="flex flex-col md:flex-row gap-6 h-[450px]">
+                            <div className="flex-1 flex flex-col gap-2">
+                                <label className="text-xs font-bold text-gray-500">1. 사용자 선택</label>
+                                <input className="border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500" placeholder="이름/부서 검색..." value={userSearch} onChange={e=>setUserSearch(e.target.value)} />
+                                <div className="border rounded bg-white overflow-y-auto custom-scroll flex-1">{filteredUsersForSelect.map(u=>(<div key={u.id} onClick={()=>setSelUser(u.id)} className={`px-4 py-3 text-sm cursor-pointer border-b hover:bg-emerald-50 transition-colors ${selUser===u.id?'bg-emerald-50 border-emerald-200 text-emerald-700 font-bold':''}`}>{u.name} ({u.dept})</div>))}</div>
+                            </div>
+                            <div className="flex-1 flex flex-col gap-2">
+                                <div className="flex items-center justify-between">
+                                    <label className="text-xs font-bold text-gray-500">2. 라이선스 선택 (보유 중 재클릭 시 회수)</label>
+                                    <button onClick={() => setRecommendSort(v => !v)} className="text-[11px] px-2 py-1 border rounded bg-white hover:bg-gray-50">
+                                        {recommendSort ? '추천정렬 ON' : '추천정렬 OFF'}
+                                    </button>
+                                </div>
+                                <div className="border rounded bg-white overflow-y-auto custom-scroll flex-1 p-1 space-y-1">
+                                    {sortedLicsForPanel.map(l=>{
+                                        const uCount=assignments.filter(a=>a.licenseId===l.id && users.some(u=>u.id===a.userId)).length;
+                                        const has=assignments.some(a=>a.userId===selUser&&a.licenseId===l.id);
+                                        const ful=uCount>=l.seats;
+                                        const sel=selLics.has(l.id);
+                                        return (<div key={l.id} onClick={()=>toggleLic(l, has, ful)} className={`p-3 rounded text-sm cursor-pointer border flex justify-between transition-all ${has?'bg-emerald-50 border-emerald-300 hover:border-red-400':sel?'bg-emerald-50 border-emerald-500 ring-1 ring-emerald-500':'bg-white border-gray-100 hover:border-emerald-300'}`}>
+                                            <div>{l.name} <span className="text-[10px] text-gray-400 ml-1">{uCount}/{l.seats}</span></div>
+                                            <div className="font-bold text-xs">{has?'보유중(회수)':ful?'수량부족':sel?<Icons.Check/>:''}</div>
+                                        </div>)
+                                    })}
+                                </div>
+                            </div>
+                        </div>
+                        <button onClick={handleAssign} disabled={!selUser||selLics.size===0} className={`w-full mt-4 py-3 rounded text-white font-bold transition-colors ${!selUser||selLics.size===0?'bg-gray-300':'bg-emerald-600 hover:bg-emerald-700'}`}>할당 실행</button>
+                    </div>
+                    <div className="glass-panel overflow-hidden">
+                        <table className="min-w-full text-sm text-left">
+                            <thead className="bg-gray-50 border-b">
+                                <tr>
+                                    <th className={`p-4 ${getSortClass('name', listSort)}`} onClick={()=>handleSort('name')}>사용자</th>
+                                    <th className={`p-4 ${getSortClass('dept', listSort)}`} onClick={()=>handleSort('dept')}>부서</th>
+                                    <th className="p-4">보유 SW (가나다순)</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">{displayedUserIds.map(uid => {
+                                const u = users.find(u => u.id === uid); if (!u) return null;
+                                const userAss = [...grouped[uid]].sort((a, b) => {
+                                    const aName = licenses.find(l => l.id === a.licenseId)?.name || '';
+                                    const bName = licenses.find(l => l.id === b.licenseId)?.name || '';
+                                    return aName.localeCompare(bName, 'ko');
+                                });
+                                return <tr key={uid} className="hover:bg-gray-50"><td className="p-4 font-medium">{u.name}</td><td className="p-4 text-gray-500">{u.dept}</td><td className="p-4"><div className="flex flex-wrap gap-2">{userAss.map(a => (<span key={a.id} onClick={()=>confirm('회수?')&&onUnassign(a.id)} className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded text-xs border border-indigo-100 cursor-pointer hover:bg-red-50 hover:text-red-600 transition-colors">{licenses.find(l=>l.id===a.licenseId)?.name} x</span>))}</div></td></tr>
+                            })}</tbody>
+                        </table>
+                        {displayedUserIds.length === 0 && <p className="p-8 text-center text-gray-400">검색 결과가 없습니다.</p>}
+                    </div>
+                </div>
+            );
+        };
+
+        function SettingsPage({ services, isDemoMode, auditLogs, onImportCsv }) {
+            const [pw, setPw] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [importType, setImportType] = useState('users');
+            const [importFile, setImportFile] = useState(null);
+            const [importing, setImporting] = useState(false);
+            const [importPreview, setImportPreview] = useState(null);
+            const [fileKey, setFileKey] = useState(0);
+            useEffect(() => {
+                setImportPreview(null);
+                setImportFile(null);
+                setFileKey(prev => prev + 1);
+            }, [importType]);
+            const handlePw = async (e) => {
+                e.preventDefault(); if(!pw.trim()) return;
+                setLoading(true);
+                try {
+                    const { setDoc, licenseDoc } = window.firebaseModules;
+                    await setDoc(licenseDoc(services.db, 'settings', 'security'), { password: pw, updatedAt: new Date().toISOString() });
+                    alert("비밀번호가 변경되었습니다."); setPw('');
+                } catch (e) { alert(e.message); }
+                setLoading(false);
+            };
+
+            const buildImportPreview = (type, rows) => {
+                if (!rows || rows.length < 2) throw new Error("유효한 데이터 행이 없습니다.");
+                const headers = rows[0].map(h => (h || '').replace(/^\uFEFF/, '').trim());
+                const dataRows = rows.slice(1).filter(r => r.some(c => String(c || '').trim() !== ''));
+                let validCount = 0;
+                const samples = [];
+
+                if (type === 'users') {
+                    const nameIdx = headers.findIndex(h => h === '이름');
+                    if (nameIdx < 0) throw new Error("사용자 CSV 헤더에 '이름' 컬럼이 필요합니다.");
+                    const deptIdx = headers.findIndex(h => h === '부서');
+                    dataRows.forEach((r) => {
+                        const name = String(r[nameIdx] || '').trim();
+                        if (!name) return;
+                        validCount++;
+                        if (samples.length < 10) samples.push({ name, dept: deptIdx >= 0 ? String(r[deptIdx] || '').trim() : '' });
+                    });
+                } else if (type === 'licenses') {
+                    const nameIdx = headers.findIndex(h => h === 'SW명');
+                    if (nameIdx < 0) throw new Error("라이선스 CSV 헤더에 'SW명' 컬럼이 필요합니다.");
+                    const typeIdx = headers.findIndex(h => h === '계약형태');
+                    const seatsIdx = headers.findIndex(h => h === '수량');
+                    dataRows.forEach((r) => {
+                        const name = String(r[nameIdx] || '').trim();
+                        if (!name) return;
+                        validCount++;
+                        if (samples.length < 10) samples.push({
+                            name,
+                            type: String(r[typeIdx] || 'Subscription').trim() || 'Subscription',
+                            seats: String(r[seatsIdx] || '1').trim()
+                        });
+                    });
+                } else {
+                    throw new Error('지원하지 않는 CSV 타입입니다.');
+                }
+
+                return { headers, rows, total: dataRows.length, validCount, samples };
+            };
+
+            const handleImportFileChange = async (e) => {
+                const file = e.target.files?.[0] || null;
+                setImportFile(file);
+                setImportPreview(null);
+                if (!file) return;
+
+                try {
+                    const content = await file.text();
+                    const rows = parseCSV(content);
+                    const preview = buildImportPreview(importType, rows);
+                    setImportPreview(preview);
+                } catch (err) {
+                    alert("미리보기 오류: " + err.message);
+                }
+            };
+
+            const handleImport = async () => {
+                if (!importFile) {
+                    alert("복원할 CSV 파일을 선택하세요.");
+                    return;
+                }
+                if (!importPreview) {
+                    alert("먼저 미리보기를 확인하세요.");
+                    return;
+                }
+                setImporting(true);
+                try {
+                    const imported = await onImportCsv(importType, importPreview.rows);
+                    alert(`${imported}건 복원 완료`);
+                    setImportFile(null);
+                    setImportPreview(null);
+                    setFileKey(prev => prev + 1);
+                } catch (e) {
+                    alert("복원 오류: " + e.message);
+                }
+                setImporting(false);
+            };
+
+            return (
+                <div className="max-w-4xl mx-auto space-y-6 animate-fade-in text-gray-800">
+                    <h2 className="text-2xl font-bold">환경설정</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="glass-panel p-8 h-fit">
+                            <h3 className="text-lg font-semibold mb-6 flex items-center gap-2"><Icons.Lock /> 보안 설정</h3>
+                            <form onSubmit={handlePw} className="space-y-4">
+                                <div><label className="text-xs text-gray-500 ml-1">새 비밀번호</label><input type="text" placeholder="입력하세요" className="w-full border rounded p-3 text-sm outline-none focus:ring-2 focus:ring-blue-500" value={pw} onChange={e=>setPw(e.target.value)} required /></div>
+                                <button disabled={loading} className="w-full bg-slate-800 text-white p-3 rounded font-bold hover:bg-slate-700 transition-colors">{loading?'변경중...':'비밀번호 변경'}</button>
+                            </form>
+                        </div>
+                        <div className="glass-panel p-8">
+                            <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><Icons.Settings /> 데이터 관리</h3>
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="text-xs font-bold text-gray-500 mb-1 block">클라우드 연결</label>
+                                    <div className="border rounded p-3 bg-slate-50 text-xs text-slate-600 space-y-1">
+                                        <p className="flex justify-between"><span className="text-slate-400">프로젝트</span><span className="font-mono">{window.userFirebaseConfig?.projectId || '-'}</span></p>
+                                        <p className="flex justify-between"><span className="text-slate-400">로그인 계정</span><span className="font-mono">{window.officeflowSessionInfo.email || '-'}</span></p>
+                                        <p className="flex justify-between gap-2"><span className="text-slate-400 shrink-0">데이터 공간</span><span className="font-mono truncate">{window.licenseAppId}</span></p>
+                                        <p className="pt-1 text-[11px] text-slate-400">{isDemoMode ? '데모 모드: 이 브라우저에서만 임시 저장됩니다.' : 'OfficeFlow One 로그인 계정별로 데이터가 분리 저장됩니다.'}</p>
+                                    </div>
+                                </div>
+                                <div className="pt-4 border-t">
+                                    <label className="text-xs font-bold text-gray-500 mb-1 block">CSV 복원</label>
+                                    <select value={importType} onChange={(e) => setImportType(e.target.value)} className="w-full border rounded p-2 text-sm mb-2 bg-white">
+                                        <option value="users">인원 CSV (users_backup.csv)</option>
+                                        <option value="licenses">라이선스 CSV (licenses_backup.csv)</option>
+                                    </select>
+                                    <input key={fileKey} type="file" accept=".csv,text/csv" onChange={handleImportFileChange} className="w-full text-xs border rounded p-2 bg-white" />
+                                    {importPreview && (
+                                        <div className="mt-2 text-[11px] bg-slate-50 border border-slate-200 rounded p-2">
+                                            <div className="font-bold text-slate-700 mb-1">미리보기</div>
+                                            <div>총 데이터 행: <b>{importPreview.total}</b> / 유효 행: <b>{importPreview.validCount}</b></div>
+                                            <div className="mt-1 text-gray-500">샘플 {importPreview.samples.length}건 표시</div>
+                                            <div className="mt-2 max-h-28 overflow-y-auto bg-white border rounded">
+                                                <table className="w-full text-[10px]">
+                                                    <tbody>
+                                                        {importPreview.samples.map((s, idx) => (
+                                                            <tr key={idx} className="border-b last:border-b-0">
+                                                                <td className="px-2 py-1">{s.name || '-'}</td>
+                                                                <td className="px-2 py-1 text-gray-500">{s.dept || s.type || '-'}</td>
+                                                                <td className="px-2 py-1 text-right text-gray-500">{s.seats || ''}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+                                    <button onClick={handleImport} disabled={importing || loading} className={`w-full mt-2 bg-emerald-50 text-emerald-700 border border-emerald-200 p-2.5 rounded font-bold text-sm hover:bg-emerald-100 ${(importing || loading) ? 'opacity-60 cursor-not-allowed' : ''}`}>
+                                        {importing ? '복원 중...' : 'CSV 복원 실행'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="glass-panel p-6">
+                        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><Icons.Info /> 최근 감사 로그</h3>
+                        <div className="max-h-72 overflow-y-auto custom-scroll border rounded">
+                            {auditLogs.length === 0 ? (
+                                <p className="text-sm text-gray-400 p-6 text-center">기록이 없습니다.</p>
+                            ) : (
+                                <table className="w-full text-xs text-left">
+                                    <thead className="bg-gray-50 border-b sticky top-0">
+                                        <tr>
+                                            <th className="p-3">시간</th>
+                                            <th className="p-3">작업</th>
+                                            <th className="p-3">대상</th>
+                                            <th className="p-3">내용</th>
+                                            <th className="p-3">변경 전/후</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y">
+                                        {auditLogs.slice(0, 50).map(log => (
+                                            <tr key={log.id}>
+                                                <td className="p-3 text-gray-500">{log.createdAt ? new Date(log.createdAt).toLocaleString() : '-'}</td>
+                                                <td className="p-3 font-bold text-slate-700">{log.action || '-'}</td>
+                                                <td className="p-3">{log.entity || '-'}</td>
+                                                <td className="p-3 text-gray-600">{log.message || '-'}</td>
+                                                <td className="p-3 text-[10px] leading-4 text-gray-500">
+                                                    <div>Before: {log.before ? JSON.stringify(log.before) : '-'}</div>
+                                                    <div>After: {log.after ? JSON.stringify(log.after) : '-'}</div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- Main App Component ---
+        function App() {
+            const { services, user, errorMsg } = useFirebase();
+            // 허브에서 이미 Google 로그인을 마쳤다면 앱 자체 비밀번호 잠금은 건너뛴다.
+            // 파일을 단독으로 열었을 때는 기존과 동일하게 비밀번호를 요구한다.
+            const [isLocked, setIsLocked] = useState(!window.officeflowSessionInfo.authenticated);
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [users, setUsers] = useState([]);
+            const [licenses, setLicenses] = useState([]);
+            const [assignments, setAssignments] = useState([]);
+            const [auditLogs, setAuditLogs] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [isDemoMode, setIsDemoMode] = useState(false);
+            const [permError, setPermError] = useState(false);
+
+            useEffect(() => {
+                if (isDemoMode) { setLoading(false); return; }
+                if (!services || !user) return;
+                const { licenseCollection, onSnapshot } = window.firebaseModules;
+                const s = (c, st, last=false) => onSnapshot(licenseCollection(services.db, c),
+                    (snap) => { st(snap.docs.map(d=>({id:d.id, ...d.data()}))); if(last) setLoading(false); },
+                    (err) => { if(err.code==='permission-denied') setIsDemoMode(true); if(last) setLoading(false); }
+                );
+                const u = s('users', setUsers);
+                const l = s('licenses', setLicenses);
+                const a = s('assignments', setAssignments, true);
+                const logs = s('auditLogs', setAuditLogs);
+                return () => { u(); l(); a(); logs(); };
+            }, [services, user, isDemoMode]);
+
+            const snapshotForAudit = (col, row) => {
+                if (!row) return null;
+                if (col === 'users') return { id: row.id, name: row.name || '', dept: row.dept || '' };
+                if (col === 'licenses') return {
+                    id: row.id,
+                    name: row.name || '',
+                    type: row.type || '',
+                    seats: parseInt(row.seats) || 0,
+                    cost: parseInt(row.cost) || 0,
+                    paymentCycle: row.paymentCycle || '',
+                    expiryDate: row.expiryDate || ''
+                };
+                if (col === 'assignments') return { id: row.id, userId: row.userId || '', licenseId: row.licenseId || '', assignedAt: row.assignedAt || '' };
+                return row;
+            };
+
+            const rowById = (col, targetId) => {
+                if (col === 'users') return users.find(x => x.id === targetId) || null;
+                if (col === 'licenses') return licenses.find(x => x.id === targetId) || null;
+                if (col === 'assignments') return assignments.find(x => x.id === targetId) || null;
+                return null;
+            };
+
+            const addAuditLog = async (action, entity, message, meta = {}) => {
+                const logData = { action, entity, message, ...meta, createdAt: new Date().toISOString() };
+                if (isDemoMode) {
+                    setAuditLogs(prev => [{ id: `local_log_${Date.now()}`, ...logData }, ...prev].slice(0, 200));
+                    return;
+                }
+                try {
+                    const { addDoc, licenseCollection } = window.firebaseModules;
+                    await addDoc(licenseCollection(services.db, 'auditLogs'), logData);
+                } catch (e) {
+                    console.warn('audit log write failed', e);
+                }
+            };
+
+            const handleDataOp = async (op, col, data, id) => {
+                const before = snapshotForAudit(col, id ? rowById(col, id) : null);
+                let createdId = id || '';
+                if (isDemoMode) {
+                    if (op==='update') {
+                        const up = (s) => s(p => p.map(x => x.id===id ? { ...x, ...data } : x));
+                        if (col==='users') up(setUsers);
+                        if (col==='licenses') up(setLicenses);
+                    } else {
+                        const ni = {...(data||{}), id: id||'local_'+Date.now()};
+                        createdId = ni.id;
+                        if(col==='users') { if(op==='add')setUsers(p=>[...p,ni]); if(op==='del'){setUsers(p=>p.filter(x=>x.id!==id)); setAssignments(p=>p.filter(x=>x.userId!==id));}}
+                        if(col==='licenses') { if(op==='add')setLicenses(p=>[...p,ni]); if(op==='del'){setLicenses(p=>p.filter(x=>x.id!==id)); setAssignments(p=>p.filter(x=>x.licenseId!==id));} }
+                        if(col==='assignments') { if(op==='add')setAssignments(p=>[...p,ni]); if(op==='del')setAssignments(p=>p.filter(x=>x.id!==id)); }
+                    }
+                } else {
+                    const { addDoc, deleteDoc, updateDoc, licenseDoc, licenseCollection } = window.firebaseModules;
+                    if(op==='update') await updateDoc(licenseDoc(services.db, col, id), data);
+                    else if(op==='add') {
+                        const created = await addDoc(licenseCollection(services.db, col), data);
+                        createdId = created.id;
+                    }
+                    else if(op==='del') await deleteDoc(licenseDoc(services.db, col, id));
+                }
+
+                const after = op === 'del' ? null : snapshotForAudit(col, { ...(before || {}), ...(data || {}), id: createdId });
+                await addAuditLog(op, col, `${col} ${op}${createdId ? ` (${createdId})` : ''}`, { before, after });
+            };
+
+            const handleDeleteUser = async (id) => {
+                const userTarget = users.find(u => u.id === id);
+                const affected = assignments.filter(a => a.userId === id);
+                const ok = confirm(`사용자 '${userTarget?.name || id}'를 삭제합니다.\n연관 할당 ${affected.length}건도 함께 제거됩니다.\n계속하시겠습니까?`);
+                if (!ok) return;
+
+                if (isDemoMode) {
+                    setUsers(prev => prev.filter(u => u.id !== id));
+                    setAssignments(prev => prev.filter(a => a.userId !== id));
+                } else {
+                    const { deleteDoc, licenseDoc } = window.firebaseModules;
+                    await Promise.all(affected.map(a => deleteDoc(licenseDoc(services.db, 'assignments', a.id))));
+                    await deleteDoc(licenseDoc(services.db, 'users', id));
+                }
+                await addAuditLog('delete', 'users', `user=${userTarget?.name || id}, assignments=${affected.length}`, {
+                    before: snapshotForAudit('users', userTarget),
+                    after: null
+                });
+            };
+
+            const handleDeleteLicense = async (id) => {
+                const licTarget = licenses.find(l => l.id === id);
+                const affected = assignments.filter(a => a.licenseId === id);
+                const ok = confirm(`라이선스 '${licTarget?.name || id}'를 삭제합니다.\n연관 할당 ${affected.length}건도 함께 제거됩니다.\n계속하시겠습니까?`);
+                if (!ok) return;
+
+                if (isDemoMode) {
+                    setLicenses(prev => prev.filter(l => l.id !== id));
+                    setAssignments(prev => prev.filter(a => a.licenseId !== id));
+                } else {
+                    const { deleteDoc, licenseDoc } = window.firebaseModules;
+                    await Promise.all(affected.map(a => deleteDoc(licenseDoc(services.db, 'assignments', a.id))));
+                    await deleteDoc(licenseDoc(services.db, 'licenses', id));
+                }
+                await addAuditLog('delete', 'licenses', `license=${licTarget?.name || id}, assignments=${affected.length}`, {
+                    before: snapshotForAudit('licenses', licTarget),
+                    after: null
+                });
+            };
+
+            const handleAssignSafe = async ({ userId, licenseId }) => {
+                const targetUser = users.find(u => u.id === userId);
+                const targetLicense = licenses.find(l => l.id === licenseId);
+                if (!targetUser || !targetLicense) return { ok: false, message: '사용자 또는 라이선스가 존재하지 않습니다.' };
+
+                const duplicated = assignments.some(a => a.userId === userId && a.licenseId === licenseId);
+                if (duplicated) return { ok: false, message: `${targetUser.name}: ${targetLicense.name}은 이미 할당됨` };
+
+                const used = assignments.filter(a => a.licenseId === licenseId && users.some(u => u.id === a.userId)).length;
+                const seats = parseInt(targetLicense.seats) || 0;
+                if (seats > 0 && used >= seats) return { ok: false, message: `${targetLicense.name}: 가용 수량 없음 (${used}/${seats})` };
+
+                await handleDataOp('add', 'assignments', { userId, licenseId, assignedAt: new Date().toISOString() });
+                return { ok: true };
+            };
+
+            const handleImportCsv = async (type, rows) => {
+                const headers = rows[0].map(h => (h || '').replace(/^\uFEFF/, '').trim());
+                const dataRows = rows.slice(1).filter(r => r.some(c => String(c || '').trim() !== ''));
+                let imported = 0;
+
+                if (type === 'users') {
+                    const nameIdx = headers.findIndex(h => h === '이름');
+                    const deptIdx = headers.findIndex(h => h === '부서');
+                    if (nameIdx < 0) throw new Error("사용자 CSV 헤더에 '이름' 컬럼이 필요합니다.");
+
+                    for (const row of dataRows) {
+                        const name = String(row[nameIdx] || '').trim();
+                        if (!name) continue;
+                        const dept = deptIdx >= 0 ? String(row[deptIdx] || '').trim() : '';
+                        await handleDataOp('add', 'users', { name, dept, createdAt: new Date().toISOString() });
+                        imported++;
+                    }
+                } else if (type === 'licenses') {
+                    const nameIdx = headers.findIndex(h => h === 'SW명');
+                    const typeIdx = headers.findIndex(h => h === '계약형태');
+                    const cycleIdx = headers.findIndex(h => h === '결제주기');
+                    const seatsIdx = headers.findIndex(h => h === '수량');
+                    const costIdx = headers.findIndex(h => h === '비용');
+                    const expiryIdx = headers.findIndex(h => h === '만료일');
+                    if (nameIdx < 0) throw new Error("라이선스 CSV 헤더에 'SW명' 컬럼이 필요합니다.");
+
+                    for (const row of dataRows) {
+                        const name = String(row[nameIdx] || '').trim();
+                        if (!name) continue;
+                        const typeValue = String(row[typeIdx] || 'Subscription').trim() || 'Subscription';
+                        const cycleText = String(row[cycleIdx] || '').trim();
+                        const paymentCycle = cycleText === '월' ? 'Monthly' : 'Yearly';
+                        const seats = parseInt(String(row[seatsIdx] || '1').replace(/,/g, ''), 10);
+                        const cost = parseInt(String(row[costIdx] || '0').replace(/,/g, ''), 10);
+                        const expiryDate = String(row[expiryIdx] || '').trim();
+
+                        const payload = {
+                            name,
+                            type: typeValue,
+                            seats: Number.isNaN(seats) ? 1 : seats,
+                            cost: Number.isNaN(cost) ? 0 : cost,
+                            expiryDate,
+                            createdAt: new Date().toISOString()
+                        };
+                        if (payload.type === 'Subscription') payload.paymentCycle = paymentCycle;
+                        await handleDataOp('add', 'licenses', payload);
+                        imported++;
+                    }
+                } else {
+                    throw new Error('지원하지 않는 CSV 타입입니다.');
+                }
+
+                await addAuditLog('import', type, `${imported}건 CSV 복원`);
+                return imported;
+            };
+
+            const handleDownloadOpsReport = () => {
+                const today = new Date().toISOString().slice(0, 10);
+                const totalSeats = licenses.reduce((acc, l) => acc + (parseInt(l.seats) || 0), 0);
+                const usedSeats = assignments.length;
+                const util = totalSeats > 0 ? Math.round((usedSeats / totalSeats) * 100) : 0;
+                const monthly = licenses.reduce((acc, l) => {
+                    if (l.type !== 'Subscription') return acc;
+                    const c = parseInt(l.cost) || 0;
+                    return acc + (l.paymentCycle === 'Monthly' ? c : Math.round(c / 12));
+                }, 0);
+                const d30 = licenses.filter(l => {
+                    if (!l.expiryDate) return false;
+                    const now = new Date(); now.setHours(0, 0, 0, 0);
+                    const exp = new Date(`${l.expiryDate}T00:00:00`);
+                    const diff = Math.floor((exp.getTime() - now.getTime()) / 86400000);
+                    return diff >= 0 && diff <= 30;
+                });
+                const unused = licenses.filter(l => !assignments.some(a => a.licenseId === l.id));
+
+                const rows = [
+                    ["리포트일자", today],
+                    ["등록 인원", `${users.length}`],
+                    ["관리 SW", `${licenses.length}`],
+                    ["총 시트", `${totalSeats}`],
+                    ["사용 시트", `${usedSeats}`],
+                    ["활용률", `${util}%`],
+                    ["월 예상 구독비용", `${monthly}`],
+                    [],
+                    ["만료 D-30 목록", "만료일"],
+                    ...d30.map(l => [l.name, l.expiryDate || '-']),
+                    [],
+                    ["유휴 라이선스", "타입"],
+                    ...unused.map(l => [l.name, l.type || '-'])
+                ];
+                downloadCSV(rows, `ops_report_${today}.csv`);
+            };
+
+            const handleLogin = async (pw) => {
+                if (isDemoMode) return pw==='admin1234';
+                try {
+                    const { licenseDoc, getDoc, setDoc } = window.firebaseModules;
+                    const r = licenseDoc(services.db, 'settings', 'security');
+                    const s = await getDoc(r).catch(()=>null);
+                    let c = 'admin1234';
+                    if (s && s.exists()) c = s.data().password || 'admin1234';
+                    else if (pw==='admin1234') { setIsLocked(false); return true; }
+                    if (pw === c) { setIsLocked(false); return true; } return false;
+                } catch (e) { return pw==='admin1234' ? (setIsLocked(false), true) : false; }
+            };
+
+            if ((!services || !user) && !isDemoMode) {
+                if (errorMsg) return <div className="h-screen flex items-center justify-center p-4"><div className="bg-white p-8 rounded shadow text-center"><p className="text-red-500 mb-4">{errorMsg}</p><button onClick={()=>setIsDemoMode(true)} className="bg-blue-600 text-white px-4 py-2 rounded font-bold">데모 모드로 시작</button><button onClick={()=>window.location.reload()} className="ml-2 bg-gray-200 px-4 py-2 rounded">다시 연결</button></div></div>;
+                return <div className="h-screen flex items-center justify-center"><div className="spinner"></div></div>;
+            }
+            if (isLocked) return <LoginScreen onLogin={handleLogin} />;
+
+            return (
+                <div className="flex h-screen overflow-hidden bg-[#f3f4f6] flex-col">
+                    {isDemoMode && <SetupBanner />}
+                    <div className="flex flex-1 overflow-hidden">
+                        <aside className="w-64 bg-slate-800 text-white flex flex-col shadow-xl z-20">
+                            <div className="p-6 border-b border-slate-700 font-bold text-blue-400 text-xl tracking-tight">SLMS</div>
+                            <nav className="flex-1 p-4 space-y-5 overflow-y-auto custom-scroll">
+                                <div>
+                                    <p className="px-3 mb-2 text-[11px] font-bold tracking-wider text-slate-400 uppercase">운영</p>
+                                    <div className="space-y-2">
+                                        <NavButton active={activeTab==='dashboard'} onClick={()=>setActiveTab('dashboard')} icon={<Icons.Dashboard/>} label="대시보드"/>
+                                        <NavButton active={activeTab==='assignments'} onClick={()=>setActiveTab('assignments')} icon={<Icons.Link/>} label="매칭 현황"/>
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="px-3 mb-2 text-[11px] font-bold tracking-wider text-slate-400 uppercase">자산</p>
+                                    <div className="space-y-2">
+                                        <NavButton active={activeTab==='users'} onClick={()=>setActiveTab('users')} icon={<Icons.Users/>} label="인원 관리"/>
+                                        <NavButton active={activeTab==='licenses'} onClick={()=>setActiveTab('licenses')} icon={<Icons.License/>} label="라이선스 관리"/>
+                                    </div>
+                                </div>
+                                <div className="pt-4 border-t border-slate-700">
+                                    <p className="px-3 mb-2 text-[11px] font-bold tracking-wider text-slate-400 uppercase">관리</p>
+                                    <div className="space-y-2">
+                                        <NavButton active={activeTab==='settings'} onClick={()=>setActiveTab('settings')} icon={<Icons.Settings/>} label="환경설정"/>
+                                    </div>
+                                </div>
+                            </nav>
+                        </aside>
+                        <main className="flex-1 overflow-y-auto p-8 relative custom-scroll">
+                            {loading ? <div className="flex justify-center mt-20"><div className="spinner"></div></div> : (
+                                <div className="max-w-7xl mx-auto">
+                                    {activeTab === 'dashboard' && <DashboardPage users={users} licenses={licenses} assignments={assignments} onDownloadReport={handleDownloadOpsReport} />}
+                                    {activeTab === 'users' && <UserManagement users={users} onAdd={d=>handleDataOp('add','users',{...d, createdAt:new Date().toISOString()})} onDelete={handleDeleteUser} onUpdate={(id,d)=>handleDataOp('update','users',d,id)} />}
+                                    {activeTab === 'licenses' && <LicenseManagement licenses={licenses} assignments={assignments} users={users} onAdd={d=>handleDataOp('add','licenses',{...d, createdAt:new Date().toISOString()})} onDelete={handleDeleteLicense} onUpdate={(id,d)=>handleDataOp('update','licenses',d,id)} />}
+                                    {activeTab === 'assignments' && <AssignmentManagement users={users} licenses={licenses} assignments={assignments} onAssign={handleAssignSafe} onUnassign={id=>handleDataOp('del','assignments',null,id)} />}
+                                    {activeTab === 'settings' && <SettingsPage services={services} isDemoMode={isDemoMode} auditLogs={auditLogs} onImportCsv={handleImportCsv} />}
+                                </div>
+                            )}
+                        </main>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
