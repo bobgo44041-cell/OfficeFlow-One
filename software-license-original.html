@@ -792,7 +792,9 @@
                                             }} className="text-blue-400 hover:text-blue-600"><Icons.Edit/></button>
                                             <button onClick={()=>onDelete(u.id)} className="text-red-300 hover:text-red-500"><Icons.Trash/></button></td></tr>))
                                     ) : (
-                                        <tr><td colSpan="3" className="p-8 text-center text-gray-400">검색 결과가 없습니다.</td></tr>
+                                        <tr><td colSpan="3" className="p-8 text-center text-gray-400">
+                                            {users.length === 0 ? '등록된 인원이 없습니다. 왼쪽에서 추가하세요.' : '검색 결과가 없습니다.'}
+                                        </td></tr>
                                     )}
                                 </tbody>
                             </table>
@@ -925,7 +927,9 @@
                                                     </tr>
                                                 ))
                                             ) : (
-                                                <tr><td colSpan="3" className="p-8 text-center text-gray-400">검색 결과가 없습니다.</td></tr>
+                                                <tr><td colSpan="3" className="p-8 text-center text-gray-400">
+                                                    {modalSearch ? '검색 결과가 없습니다.' : '아직 이 SW를 사용하는 인원이 없습니다.'}
+                                                </td></tr>
                                             )}
                                         </tbody>
                                     </table>
@@ -1074,7 +1078,13 @@
                                         </td>
                                         <td className="px-4 py-4 whitespace-nowrap"><div className="flex justify-center gap-3"><button onClick={()=>{setEditId(l.id); setForm({ ...EMPTY_LICENSE_FORM, ...l, paymentCycle: l.paymentCycle || 'Yearly' })}} className="text-blue-400"><Icons.Edit/></button><button onClick={()=>onDelete(l.id)} className="text-red-300"><Icons.Trash/></button></div></td>
                                     </tr>)
-                                })}</tbody>
+                                })}
+                                {sortedLics.length === 0 && (
+                                    <tr><td colSpan="6" className="px-4 py-12 text-center text-gray-400 text-sm">
+                                        등록된 라이선스가 없습니다. 왼쪽 양식으로 첫 계약을 추가하세요.
+                                    </td></tr>
+                                )}
+                                </tbody>
                             </table>
                         </div>
                     </div>
@@ -1237,7 +1247,13 @@
                                 return <tr key={uid} className="hover:bg-gray-50"><td className="p-4 font-medium">{u.name}</td><td className="p-4 text-gray-500">{u.dept}</td><td className="p-4"><div className="flex flex-wrap gap-2">{userAss.map(a => (<span key={a.id} onClick={()=>confirm('회수?')&&onUnassign(a.id)} className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded text-xs border border-indigo-100 cursor-pointer hover:bg-red-50 hover:text-red-600 transition-colors">{licenses.find(l=>l.id===a.licenseId)?.name} x</span>))}</div></td></tr>
                             })}</tbody>
                         </table>
-                        {displayedUserIds.length === 0 && <p className="p-8 text-center text-gray-400">검색 결과가 없습니다.</p>}
+                        {displayedUserIds.length === 0 && (
+                            <p className="p-8 text-center text-gray-400">
+                                {users.length === 0
+                                    ? '등록된 인원이 없습니다. 인원 관리에서 먼저 추가하세요.'
+                                    : '검색 결과가 없습니다.'}
+                            </p>
+                        )}
                     </div>
                 </div>
             );
