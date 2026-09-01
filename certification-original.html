@@ -1,0 +1,2427 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>인증·특허 관리</title>
+
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 한글 폴백 폰트 (다른 iframe 앱들과 동일) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+
+    <!-- OfficeFlow One 세션 브릿지 -->
+    <script>
+        const OFFICEFLOW_STORAGE_KEY = 'officeflow-one-embed-session';
+        const LEGACY_OFFICEFLOW_STORAGE_KEY = 'officeflow-one-mvp-state';
+
+        function getOfficeFlowState() {
+            try {
+                const raw =
+                    window.localStorage.getItem(OFFICEFLOW_STORAGE_KEY) ||
+                    window.localStorage.getItem(LEGACY_OFFICEFLOW_STORAGE_KEY);
+                if (raw) return JSON.parse(raw);
+            } catch (error) {}
+
+            return null;
+        }
+
+        const officeflowState = getOfficeFlowState();
+        const officeflowSession = officeflowState?.session?.authenticated ? officeflowState.session : null;
+        const officeflowUid = String(officeflowSession?.uid || '').trim();
+        const officeflowEmail = String(officeflowSession?.email || '').toLowerCase();
+        const certUserKey = (officeflowUid || officeflowEmail || 'guest').replace(/[^a-z0-9]+/gi, '_');
+
+        // 허브 로그인 사용자별로 데이터를 분리한다. firestore.rules 의
+        // ownsApp(appId, 'ofw-certification') 규칙과 짝을 이룬다.
+        window.certAppId = `ofw-certification-${certUserKey}`;
+        window.officeflowSessionInfo = { uid: officeflowUid, email: officeflowEmail, authenticated: Boolean(officeflowSession) };
+    </script>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
+
+        // 모든 문서는 artifacts/{certAppId}/public/data/{컬렉션} 아래에 저장된다.
+        const scopedSegments = (col) => ['artifacts', window.certAppId, 'public', 'data', col];
+        const certCollection = (db, col) => collection(db, ...scopedSegments(col));
+        const certDoc = (db, col, id) => doc(db, ...scopedSegments(col), id);
+
+        window.firebaseModules = {
+            initializeApp, getAuth, onAuthStateChanged,
+            getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc,
+            getAnalytics,
+            certCollection, certDoc
+        };
+
+        window.userFirebaseConfig = {
+            apiKey: "AIzaSyBfT58Y9XwjalTk0E0NPBWqkVVVOWN9zFQ",
+            authDomain: "officeflow-one.firebaseapp.com",
+            projectId: "officeflow-one",
+            storageBucket: "officeflow-one.firebasestorage.app",
+            messagingSenderId: "1084176732785",
+            appId: "1:1084176732785:web:56e241ddcdb69afdf101d0",
+            measurementId: "G-SYP4NQMGP7"
+        };
+    </script>
+
+    <style>
+        /* 허브(index.html) 및 다른 앱들과 동일한 폰트 스택 */
+        body {
+          background-color: #f3f4f6;
+          font-family: "Pretendard Variable", "Pretendard", "SUIT", "Noto Sans KR",
+            -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        .glass-panel { background: white; border: 1px solid #e5e7eb; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); border-radius: 0.75rem; }
+        .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .spinner { border: 3px solid rgba(0, 0, 0, 0.1); border-radius: 50%; border-top: 3px solid #3b82f6; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .custom-checkbox:checked { background-color: #10b981; border-color: #10b981; }
+        .custom-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scroll::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- 상수 ---
+        const CERT_CATEGORIES = [
+            '이노비즈', '메인비즈', '벤처기업확인', '기업부설연구소', '연구개발전담부서',
+            'ISO 인증', '직접생산확인', '여성기업확인', '장애인기업확인', '조달우수제품', '기타',
+        ];
+
+        // 산업재산권 종류별 존속기간. 특허법/실용신안법/디자인보호법/상표법 기준이다.
+        // 상표만 등록일 기준 10년이고 갱신으로 반영구 유지가 가능하다.
+        const IP_TYPES = [
+            { value: 'patent',    label: '특허',     termYears: 20, termFrom: 'application',  renewable: false },
+            { value: 'utility',   label: '실용신안', termYears: 10, termFrom: 'application',  renewable: false },
+            { value: 'design',    label: '디자인',   termYears: 20, termFrom: 'application',  renewable: false },
+            { value: 'trademark', label: '상표',     termYears: 10, termFrom: 'registration', renewable: true },
+        ];
+
+        const getIpType = (value) => IP_TYPES.find(t => t.value === value) || IP_TYPES[0];
+
+        const DEFAULT_ALERT_STAGES = [90, 60, 30, 7];
+
+        const EMPTY_CERT_FORM = {
+            name: '', category: '이노비즈', issuer: '', certNo: '',
+            acquiredDate: '', expiryDate: '',
+            alertDays: '', manager: '', docLink: '', memo: '',
+        };
+
+        const EMPTY_PATENT_FORM = {
+            name: '', rightType: 'patent',
+            applicationNo: '', applicationDate: '',
+            registrationNo: '', registrationDate: '',
+            paidThroughYear: 3, annuityFee: 0, agent: '',
+            alertDays: '', manager: '', docLink: '', memo: '',
+        };
+
+        // --- 유틸 ---
+        const toDateOnly = (dateStr) => {
+            if (!dateStr) return null;
+            const d = new Date(`${dateStr}T00:00:00`);
+            return Number.isNaN(d.getTime()) ? null : d;
+        };
+
+        const todayDateOnly = () => { const t = new Date(); t.setHours(0, 0, 0, 0); return t; };
+
+        const diffDaysFromToday = (dateStr) => {
+            const d = toDateOnly(dateStr);
+            if (!d) return null;
+            return Math.floor((d.getTime() - todayDateOnly().getTime()) / 86400000);
+        };
+
+        const toDateString = (date) => {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        };
+
+        const addYears = (dateStr, years) => {
+            const d = toDateOnly(dateStr);
+            if (!d) return '';
+            const n = new Date(d.getTime());
+            n.setFullYear(n.getFullYear() + years);
+            return toDateString(n);
+        };
+
+        const num = (v) => parseInt(String(v).replace(/,/g, ''), 10) || 0;
+        const formatKrw = (amount) => num(amount).toLocaleString() + '원';
+
+        // --- 특허 연차 계산 ---
+        // 존속기간 만료일. 특허/실용신안/디자인은 출원일, 상표는 등록일이 기산점이다.
+        const patentTermEnd = (p) => {
+            const t = getIpType(p.rightType);
+            const base = t.termFrom === 'registration' ? p.registrationDate : p.applicationDate;
+            return base ? addYears(base, t.termYears) : '';
+        };
+
+        // 다음 연차료 납부기한.
+        // 설정등록 때 1~3년분을 한꺼번에 내고, 그 다음 연차부터 매년
+        // 등록일의 응당일 전까지 납부한다. paidThroughYear 는 납부를 마친 연차다.
+        const nextAnnuity = (p) => {
+            const t = getIpType(p.rightType);
+            if (t.renewable) return null; // 상표는 연차료 대신 10년 갱신등록료
+            if (!p.registrationDate) return null;
+            const paid = Math.max(0, parseInt(p.paidThroughYear) || 0);
+            const due = addYears(p.registrationDate, paid);
+            const termEnd = patentTermEnd(p);
+            if (termEnd && due > termEnd) return null; // 존속기간이 먼저 끝난다
+            return { year: paid + 1, due };
+        };
+
+        // 상표 갱신등록 기한 (등록일 + 10년)
+        const trademarkRenewalDue = (p) =>
+            (p.registrationDate ? addYears(p.registrationDate, getIpType(p.rightType).termYears) : '');
+
+        // --- 레코드 정규화 ---
+        // 인증서와 특허는 대장이 다르지만, 기한 알림/일정/대시보드에서는
+        // '언제까지 무엇을 해야 하는가' 하나의 축으로 합쳐서 본다.
+        const toRecord = (item, kind) => {
+            if (kind === 'cert') {
+                return {
+                    ...item, kind, recordId: 'cert:' + item.id,
+                    title: item.name || '', org: item.issuer || '', badge: item.category || '인증',
+                    actionDate: item.expiryDate || '', actionLabel: '인증 만료',
+                    startDate: item.acquiredDate || '', endDate: item.expiryDate || '',
+                    cost: 0,
+                };
+            }
+            const t = getIpType(item.rightType);
+            const base = {
+                ...item, kind, recordId: 'patent:' + item.id,
+                title: item.name || '', org: item.agent || '', badge: t.label,
+                cost: num(item.annuityFee),
+            };
+            if (t.renewable) {
+                const due = trademarkRenewalDue(item);
+                return { ...base, actionDate: due, actionLabel: '갱신 기한',
+                    startDate: item.registrationDate || item.applicationDate || '', endDate: due };
+            }
+            const a = nextAnnuity(item);
+            const termEnd = patentTermEnd(item);
+            return {
+                ...base,
+                actionDate: a ? a.due : termEnd,
+                actionLabel: a ? `${a.year}년차 연차료` : '존속기간 만료',
+                annuityYear: a ? a.year : null,
+                startDate: item.applicationDate || '', endDate: termEnd,
+            };
+        };
+
+        const buildRecords = (certs, patents) => [
+            ...certs.map(c => toRecord(c, 'cert')),
+            ...patents.map(p => toRecord(p, 'patent')),
+        ];
+
+        // --- 알림 엔진 ---
+        // 전역 알림 단계(예: 90/60/30/7일)를 쓰되, 항목마다 직접 지정할 수도 있다.
+        const parseStages = (raw) => String(raw || '')
+            .split(',')
+            .map(s => parseInt(String(s).trim(), 10))
+            .filter(n => !Number.isNaN(n) && n > 0);
+
+        const stagesFor = (record, globalStages) => {
+            const own = parseStages(record.alertDays);
+            const list = own.length ? own : globalStages;
+            return [...new Set(list)].sort((a, b) => b - a);
+        };
+
+        // 지금 걸려 있는 단계 = 남은 일수를 넘어선 단계 중 가장 촘촘한 것.
+        // D-45 이고 단계가 90/60/30 이면 60일 단계가 걸린다.
+        const activeStage = (dDay, stages) => {
+            if (dDay === null) return null;
+            const hit = stages.filter(s => dDay <= s);
+            return hit.length ? Math.min(...hit) : null;
+        };
+
+        // 확인 표시는 기한과 단계를 함께 키로 쓴다. 갱신해서 기한이 바뀌면
+        // 예전 확인 기록은 자동으로 효력을 잃고 새 주기의 알림이 다시 뜬다.
+        const ackKey = (deadline, stage) => `${deadline}#${stage}`;
+        const isAcked = (record, stage) =>
+            Array.isArray(record.alertAcks) && record.alertAcks.includes(ackKey(record.actionDate, stage));
+
+        // 알림 대상 한 건. dDay 가 없으면(기한 미입력) 알림에 잡히지 않는다.
+        const toAlert = (record, globalStages) => {
+            const dDay = diffDaysFromToday(record.actionDate);
+            if (dDay === null) return null;
+            const stages = stagesFor(record, globalStages);
+            const stage = activeStage(dDay, stages);
+            if (stage === null) return null;
+            return { record, dDay, stage, stages, acked: isAcked(record, stage) };
+        };
+
+        // 따옴표와 줄바꿈이 들어간 셀까지 처리하는 CSV 파서
+        const parseCSV = (text) => {
+            const clean = String(text).replace(/^﻿/, '').replace(/\r\n/g, '\n');
+            const rows = [];
+            let row = [], cell = '', inQuotes = false;
+            for (let i = 0; i < clean.length; i++) {
+                const ch = clean[i];
+                if (inQuotes) {
+                    if (ch === '"') {
+                        if (clean[i + 1] === '"') { cell += '"'; i++; }
+                        else inQuotes = false;
+                    } else cell += ch;
+                } else if (ch === '"') inQuotes = true;
+                else if (ch === ',') { row.push(cell); cell = ''; }
+                else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+                else cell += ch;
+            }
+            if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+            return rows.filter(r => r.some(c => String(c).trim() !== ''));
+        };
+
+        const downloadCSV = (rows, filename) => {
+            const csv = rows.map(r => r.map(c => {
+                const v = String(c === undefined || c === null ? '' : c);
+                return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+            }).join(',')).join('\n');
+            const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = filename; a.click();
+            URL.revokeObjectURL(url);
+        };
+
+        // --- Icons ---
+        const Icons = {
+            Dashboard: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>,
+            Shield: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>,
+            Bulb: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>,
+            Bell: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.158c0 .538-.214 1.055-.595 1.437L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>,
+            Calendar: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>,
+            Settings: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>,
+            Alert: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>,
+            Trash: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>,
+            Edit: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>,
+            Download: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>,
+            Search: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>,
+            XMark: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>,
+            CloudOff: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3l18 18M18.364 5.636A9 9 0 015.636 18.364M12 6a6 6 0 016 6" /></svg>,
+            Bank: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 3l9 5H3l9-5zM5 10v7m4-7v7m6-7v7m4-7v7M3 21h18" /></svg>,
+            History: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>,
+            Refresh: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>,
+            Check: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>,
+        };
+
+        // --- 내비게이션 정의 (사이드바와 모바일 하단바가 공유) ---
+        const NAV_GROUPS = [
+            { title: '운영', items: [
+                { id: 'dashboard', label: '대시보드',   short: '홈',   Icon: Icons.Dashboard },
+                { id: 'alerts',    label: '알림 센터',  short: '알림', Icon: Icons.Bell },
+                { id: 'schedule',  label: '갱신 일정',  short: '일정', Icon: Icons.Calendar },
+            ]},
+            { title: '대장', items: [
+                { id: 'certs',   label: '인증서 관리', short: '인증', Icon: Icons.Shield },
+                { id: 'patents', label: '특허 관리',   short: '특허', Icon: Icons.Bulb },
+                { id: 'issuers', label: '기관별 현황', short: '기관', Icon: Icons.Bank },
+            ]},
+            { title: '관리', items: [
+                { id: 'audit',    label: '감사 로그', short: '로그', Icon: Icons.History },
+                { id: 'settings', label: '환경설정',  short: '설정', Icon: Icons.Settings },
+            ]},
+        ];
+
+        const NAV_ITEMS = NAV_GROUPS.flatMap(g => g.items);
+
+        // --- 감사 로그 ---
+        const CERT_FIELD_LABELS = {
+            name: '인증명', category: '구분', issuer: '인증기관', certNo: '인증번호',
+            acquiredDate: '취득일', expiryDate: '만료일',
+            alertDays: '개별 알림단계', manager: '담당자', docLink: '문서링크', memo: '비고',
+        };
+
+        const PATENT_FIELD_LABELS = {
+            name: '발명의 명칭', rightType: '권리구분',
+            applicationNo: '출원번호', applicationDate: '출원일',
+            registrationNo: '등록번호', registrationDate: '등록일',
+            paidThroughYear: '납부완료 연차', annuityFee: '연차료', agent: '대리인',
+            alertDays: '개별 알림단계', manager: '담당자', docLink: '문서링크', memo: '비고',
+        };
+
+        const AUDIT_ACTIONS = {
+            add:    { label: '등록',   cls: 'bg-blue-100 text-blue-700' },
+            update: { label: '수정',   cls: 'bg-amber-100 text-amber-700' },
+            renew:  { label: '갱신처리', cls: 'bg-emerald-100 text-emerald-700' },
+            pay:    { label: '연차료 납부', cls: 'bg-teal-100 text-teal-700' },
+            ack:    { label: '알림확인', cls: 'bg-slate-100 text-slate-600' },
+            del:    { label: '삭제',   cls: 'bg-red-100 text-red-700' },
+        };
+
+        const labelsFor = (target) => (target === 'patent' ? PATENT_FIELD_LABELS : CERT_FIELD_LABELS);
+
+        const snapshotForAudit = (item, target) => {
+            if (!item) return null;
+            const out = {};
+            Object.keys(labelsFor(target)).forEach(k => { out[k] = item[k] === undefined ? '' : item[k]; });
+            return out;
+        };
+
+        const formatAuditValue = (key, value) => {
+            if (value === undefined || value === null || value === '') return '없음';
+            if (key === 'rightType') return getIpType(value).label;
+            if (key === 'annuityFee') return Number(value).toLocaleString();
+            return String(value);
+        };
+
+        // before/after 에서 실제로 바뀐 필드만 뽑는다.
+        const diffAuditSnapshots = (before, after, target) => {
+            if (!before || !after) return [];
+            const labels = labelsFor(target);
+            return Object.keys(labels)
+                .filter(k => String(before[k] ?? '') !== String(after[k] ?? ''))
+                .map(k => ({ key: k, label: labels[k], from: formatAuditValue(k, before[k]), to: formatAuditValue(k, after[k]) }));
+        };
+
+        // --- 공통 UI ---
+        function NavButton({ active, onClick, icon, label }) {
+            return (
+                <button onClick={onClick} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all ${active ? 'bg-blue-600 text-white shadow-md' : 'text-slate-300 hover:bg-slate-700 hover:text-white'}`}>
+                    {icon}<span className="font-medium">{label}</span>
+                </button>
+            );
+        }
+
+        function StatCard({ title, value, subtext, color = 'blue', onClick }) {
+            const borderColorClassMap = {
+                blue: 'border-blue-500', indigo: 'border-indigo-500', purple: 'border-purple-500',
+                emerald: 'border-emerald-500', orange: 'border-orange-500', red: 'border-red-500',
+            };
+            return (
+                <div onClick={onClick} className={`glass-panel p-6 border-l-4 ${borderColorClassMap[color] || borderColorClassMap.blue} ${onClick ? 'cursor-pointer hover:bg-gray-50 transition-colors' : ''}`}>
+                    <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">{title}</h3>
+                    <div className="mt-2"><span className="text-3xl font-bold text-gray-900">{value}</span></div>
+                    {subtext && <p className="mt-1 text-sm text-gray-400">{subtext}</p>}
+                </div>
+            );
+        }
+
+        function SetupBanner() {
+            return (
+                <div className="bg-amber-100 border-b border-amber-200 text-amber-900 px-4 py-3 flex items-center justify-between shadow-sm">
+                    <div className="flex items-center gap-3"><div className="text-amber-600"><Icons.CloudOff /></div><p className="text-sm font-bold">데모 모드 (클라우드 연결 안 됨 · 이 브라우저에서만 임시 저장)</p></div>
+                    <button onClick={() => window.location.reload()} className="text-xs bg-white border border-amber-300 px-3 py-1 rounded hover:bg-amber-50">다시 연결</button>
+                </div>
+            );
+        }
+
+        // 인증서와 특허 목록이 같은 방식으로 쓴다.
+        function Pagination({ page, totalPages, onGo }) {
+            if (totalPages <= 1) return null;
+            return (
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                    <span className="text-xs text-gray-500">{page} / {totalPages} 페이지</span>
+                    <div className="flex items-center gap-1">
+                        <button type="button" onClick={() => onGo(page - 1)} disabled={page <= 1}
+                            className="px-3 py-1.5 rounded border text-xs font-bold bg-white text-slate-600 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white">
+                            이전
+                        </button>
+                        {Array.from({ length: totalPages }, (_, i) => i + 1)
+                            // 페이지가 많아지면 현재 위치 주변과 양 끝만 보여준다.
+                            .filter(n => n === 1 || n === totalPages || Math.abs(n - page) <= 1)
+                            .map((n, i, arr) => (
+                                <React.Fragment key={n}>
+                                    {i > 0 && n - arr[i - 1] > 1 && <span className="px-1 text-xs text-gray-300">…</span>}
+                                    <button type="button" onClick={() => onGo(n)}
+                                        className={`w-8 py-1.5 rounded text-xs font-bold ${n === page ? 'bg-blue-600 text-white' : 'border bg-white text-slate-600 hover:bg-gray-50'}`}>
+                                        {n}
+                                    </button>
+                                </React.Fragment>
+                            ))}
+                        <button type="button" onClick={() => onGo(page + 1)} disabled={page >= totalPages}
+                            className="px-3 py-1.5 rounded border text-xs font-bold bg-white text-slate-600 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white">
+                            다음
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        function DDayBadge({ dDay }) {
+            if (dDay === null || dDay === undefined) return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-500">기한 미설정</span>;
+            if (dDay < 0) return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600 text-white">{Math.abs(dDay)}일 경과</span>;
+            if (dDay <= 30) return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">D-{dDay}</span>;
+            if (dDay <= 90) return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700">D-{dDay}</span>;
+            return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600">D-{dDay}</span>;
+        }
+
+        // --- Firebase 연결 ---
+        function useFirebase() {
+            const [services, setServices] = useState(null);
+            const [user, setUser] = useState(null);
+            const [errorMsg, setErrorMsg] = useState('');
+
+            useEffect(() => {
+                let mounted = true;
+                const init = async () => {
+                    const sdkTimeout = setTimeout(() => {
+                        if (mounted && !window.firebaseModules) setErrorMsg('Firebase SDK 로딩 시간 초과 (네트워크/차단 확인 필요)');
+                    }, 5000);
+
+                    while (!window.firebaseModules) {
+                        await new Promise(r => setTimeout(r, 100));
+                        if (!mounted) return;
+                    }
+                    clearTimeout(sdkTimeout);
+
+                    const { initializeApp, getAuth, onAuthStateChanged, getFirestore, getAnalytics } = window.firebaseModules;
+
+                    try {
+                        const connTimeout = setTimeout(() => {
+                            if (mounted && !user) setErrorMsg('서버 연결 응답 없음 (네트워크 방화벽 이슈 또는 로그인 세션 만료)');
+                        }, 10000);
+
+                        if (!window._firebaseAppInstance) window._firebaseAppInstance = initializeApp(window.userFirebaseConfig);
+                        const app = window._firebaseAppInstance;
+                        const auth = getAuth(app);
+                        const db = getFirestore(app);
+                        try { getAnalytics(app); } catch (e) {}
+
+                        // OfficeFlow One 허브에서 Google 로그인한 세션을 그대로 승계한다.
+                        onAuthStateChanged(auth, (u) => {
+                            if (!mounted) return;
+                            clearTimeout(connTimeout);
+                            if (u) { setUser(u); setServices({ db, auth }); }
+                            else setErrorMsg('OfficeFlow One 로그인 세션을 찾지 못했습니다. 허브에서 Google 로그인 후 다시 실행해 주세요.');
+                        }, (err) => { clearTimeout(connTimeout); setErrorMsg(`인증 오류: ${err.message}`); });
+                    } catch (err) {
+                        console.error('Firebase init failed', err);
+                        setErrorMsg(`초기화 오류: ${err.message}`);
+                    }
+                };
+                init();
+                return () => { mounted = false; };
+            }, []);
+
+            return { services, user, errorMsg };
+        }
+
+        // --- 차트 ---
+        // 긴급도 색은 dataviz 검증기 통과 (경과/임박/여유, CVD ΔE 18 이상).
+        // amber 는 배경 대비가 낮아 막대마다 D-day 라벨을 함께 표시한다.
+        const URGENCY = {
+            overdue: { color: '#dc2626', label: '기한 경과' },
+            soon:    { color: '#f59e0b', label: 'D-90 이내' },
+            later:   { color: '#3b82f6', label: '여유' },
+        };
+
+        const urgencyOf = (dDay) => (dDay === null ? null : dDay < 0 ? 'overdue' : dDay <= 90 ? 'soon' : 'later');
+
+        // 대응 기한까지 남은 일수를 가로 막대로 그린다.
+        // 인증서(3년)와 특허 존속기간(20년)은 길이가 너무 달라 계약기간을 그대로
+        // 그리면 축이 망가진다. 그래서 '언제까지 해야 하는가'만 공통 축으로 본다.
+        const TIMELINE_DAYS = 730;
+
+        function DeadlineTimeline({ records }) {
+            const [hover, setHover] = useState(null);
+
+            const rows = useMemo(() => records
+                .map(r => ({ record: r, dDay: diffDaysFromToday(r.actionDate) }))
+                .filter(x => x.dDay !== null)
+                .sort((a, b) => a.dDay - b.dDay), [records]);
+
+            if (rows.length === 0) {
+                return (
+                    <div className="glass-panel p-6">
+                        <h3 className="font-bold text-gray-700 mb-1">대응 기한 타임라인</h3>
+                        <p className="text-sm text-gray-400 py-8 text-center">만료일 또는 연차료 기한이 입력된 항목이 없습니다.</p>
+                    </div>
+                );
+            }
+
+            const pct = (d) => (Math.min(Math.max(d, 0), TIMELINE_DAYS) / TIMELINE_DAYS) * 100;
+
+            // 눈금: 3개월 간격
+            const today = todayDateOnly();
+            const ticks = [];
+            for (let m = 0; m <= 24; m += 3) {
+                const d = new Date(today.getFullYear(), today.getMonth() + m, 1);
+                const days = Math.floor((d.getTime() - today.getTime()) / 86400000);
+                if (days >= 0 && days <= TIMELINE_DAYS) {
+                    ticks.push({ key: `${d.getFullYear()}-${d.getMonth() + 1}`, label: `${String(d.getFullYear()).slice(2)}.${String(d.getMonth() + 1).padStart(2, '0')}`, left: pct(days) });
+                }
+            }
+
+            const shown = rows.slice(0, 14);
+
+            return (
+                <div className="glass-panel p-6">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
+                        <h3 className="font-bold text-gray-700">대응 기한 타임라인</h3>
+                        <div className="flex flex-wrap gap-3 text-[11px] text-gray-500">
+                            {Object.values(URGENCY).map(u => (
+                                <span key={u.label} className="flex items-center gap-1.5">
+                                    <span className="w-3 h-2 rounded-sm" style={{ background: u.color }}></span>{u.label}
+                                </span>
+                            ))}
+                            <span className="flex items-center gap-1.5"><span className="w-[2px] h-3 bg-slate-800"></span>오늘</span>
+                        </div>
+                    </div>
+                    <p className="text-[11px] text-gray-400 mb-4">
+                        막대 끝이 대응 기한입니다. 축은 24개월까지이며, 그 이후 기한은 오른쪽 끝에 맞닿습니다.
+                        {rows.length > shown.length && ` 기한이 빠른 ${shown.length}건만 표시합니다.`}
+                    </p>
+
+                    <div className="relative">
+                        {/* 월 눈금 */}
+                        <div className="relative h-4 ml-[132px] mr-[84px] mb-1">
+                            {ticks.map(t => (
+                                <span key={t.key} className="absolute text-[10px] text-gray-400 -translate-x-1/2" style={{ left: t.left + '%' }}>{t.label}</span>
+                            ))}
+                        </div>
+
+                        <div className="space-y-2">
+                            {shown.map(({ record, dDay }) => {
+                                const u = URGENCY[urgencyOf(dDay)] || URGENCY.later;
+                                const width = Math.max(1.5, pct(dDay));
+                                return (
+                                    <div key={record.recordId} className="flex items-center gap-3">
+                                        <span className="w-[120px] shrink-0 text-xs text-gray-700 truncate text-right" title={record.title}>{record.title}</span>
+                                        <div className="relative flex-1 h-7">
+                                            <div className="absolute inset-y-2 inset-x-0 bg-gray-100 rounded"></div>
+                                            {ticks.map(t => (
+                                                <span key={t.key} className="absolute inset-y-0 w-px bg-gray-200" style={{ left: t.left + '%' }}></span>
+                                            ))}
+                                            <div
+                                                className="absolute inset-y-1.5 left-0 rounded cursor-default"
+                                                style={{ width: width + '%', background: u.color }}
+                                                onMouseEnter={() => setHover(record.recordId)}
+                                                onMouseLeave={() => setHover(null)}
+                                            ></div>
+                                            <span className="absolute inset-y-0 left-0 w-[2px] bg-slate-800 rounded"></span>
+                                            {hover === record.recordId && (
+                                                <div className="absolute z-20 -top-1 left-1/2 -translate-x-1/2 -translate-y-full bg-slate-800 text-white text-[11px] rounded px-2.5 py-1.5 whitespace-nowrap shadow-lg pointer-events-none">
+                                                    {record.actionLabel} {record.actionDate}
+                                                    <div className="text-slate-300">{record.badge}{record.org ? ' · ' + record.org : ''}</div>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <span className={`w-[76px] shrink-0 text-right text-[11px] font-bold ${dDay < 0 ? 'text-red-600' : dDay <= 90 ? 'text-amber-700' : 'text-gray-400'}`}>
+                                            {dDay < 0 ? `${Math.abs(dDay)}일 경과` : `D-${dDay}`}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 어느 해에 기한이 몰리는지 본다.
+        function DeadlineByYear({ records }) {
+            const [hover, setHover] = useState(null);
+
+            const years = useMemo(() => {
+                const map = new Map();
+                records.forEach(r => {
+                    const d = toDateOnly(r.actionDate);
+                    if (!d) return;
+                    const y = d.getFullYear();
+                    if (!map.has(y)) map.set(y, { year: y, count: 0, cert: 0, patent: 0, names: [] });
+                    const g = map.get(y);
+                    g.count += 1;
+                    if (r.kind === 'cert') g.cert += 1; else g.patent += 1;
+                    g.names.push(r.title);
+                });
+                return [...map.values()].sort((a, b) => a.year - b.year);
+            }, [records]);
+
+            const max = years.length ? Math.max(...years.map(y => y.count)) : 0;
+
+            return (
+                <div className="glass-panel p-6">
+                    <h3 className="font-bold text-gray-700 mb-1">연도별 기한 도래 건수</h3>
+                    <p className="text-[11px] text-gray-400 mb-4">인증 만료일과 특허 연차료 기한을 연도별로 묶었습니다. 한 해에 몰리면 예산과 일정을 미리 나눠야 합니다.</p>
+                    {years.length === 0 ? (
+                        <p className="text-sm text-gray-400 py-8 text-center">기한이 입력된 항목이 없습니다.</p>
+                    ) : (
+                        <>
+                            <div className="flex items-end gap-3 h-44">
+                                {years.map(y => {
+                                    const h = max > 0 ? Math.max(4, (y.count / max) * 100) : 4;
+                                    return (
+                                        <div key={y.year} className="flex-1 flex flex-col items-center justify-end h-full relative"
+                                            onMouseEnter={() => setHover(y.year)} onMouseLeave={() => setHover(null)}>
+                                            {hover === y.year && (
+                                                <div className="absolute z-20 bottom-full mb-1 bg-slate-800 text-white text-[11px] rounded px-2.5 py-1.5 max-w-[220px] shadow-lg pointer-events-none">
+                                                    {y.names.join(', ')}
+                                                </div>
+                                            )}
+                                            <span className="text-[11px] font-bold text-gray-700 mb-1">{y.count}</span>
+                                            <div className="w-full rounded-t" style={{ height: h + '%', background: '#2563eb' }}></div>
+                                            <span className="text-[11px] text-gray-500 mt-1.5">{y.year}</span>
+                                            <span className="text-[10px] text-gray-400">인증 {y.cert} · 특허 {y.patent}</span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                            <p className="mt-4 pt-3 border-t text-xs text-gray-500 flex justify-between">
+                                <span>합계</span><span className="font-bold text-gray-800">{years.reduce((a, y) => a + y.count, 0)}건</span>
+                            </p>
+                        </>
+                    )}
+                </div>
+            );
+        }
+
+        // 어느 기관에 얼마나 묶여 있는지 본다. 같은 기관 건은 갱신 절차가 비슷해 함께 처리하기 좋다.
+        const ISSUER_CHART_LIMIT = 8;
+
+        function IssuerChart({ records }) {
+            const all = useMemo(() => {
+                const map = new Map();
+                records.forEach(r => {
+                    const key = (r.org || '').trim() || '(미입력)';
+                    if (!map.has(key)) map.set(key, { name: key, count: 0, urgent: 0 });
+                    const g = map.get(key);
+                    g.count += 1;
+                    const d = diffDaysFromToday(r.actionDate);
+                    if (d !== null && d <= 90) g.urgent += 1;
+                });
+                return [...map.values()].sort((a, b) => b.count - a.count);
+            }, [records]);
+
+            const rows = all.slice(0, ISSUER_CHART_LIMIT);
+            const max = Math.max(1, ...rows.map(r => r.count));
+
+            return (
+                <div className="glass-panel p-6">
+                    <h3 className="font-bold text-gray-700 mb-1">기관·대리인별 보유 현황</h3>
+                    <p className="text-[11px] text-gray-400 mb-4">
+                        인증기관과 특허 대리인을 함께 봅니다. 기한이 90일 이내로 남은 건은 따로 표시합니다.
+                        {all.length > rows.length && ` 보유 건수가 많은 ${rows.length}곳만 표시하며, 전체 ${all.length}곳은 기관별 현황에서 볼 수 있습니다.`}
+                    </p>
+                    {rows.length === 0 ? (
+                        <p className="text-sm text-gray-400 py-8 text-center">등록된 항목이 없습니다.</p>
+                    ) : (
+                        <div className="space-y-3">
+                            {rows.map(r => (
+                                <div key={r.name}>
+                                    <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm mb-1">
+                                        <span className="flex items-center gap-2">
+                                            <span className="text-gray-700">{r.name}</span>
+                                            <span className="font-bold text-gray-800">{r.count}건</span>
+                                        </span>
+                                        {r.urgent > 0 && <span className="text-[10px] font-bold text-red-600">D-90 이내 {r.urgent}건</span>}
+                                    </div>
+                                    <div className="h-2 bg-gray-100 rounded">
+                                        <div className="h-2 rounded" style={{ width: (r.count / max) * 100 + '%', background: '#2563eb' }}></div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // 특허 연차료가 언제 얼마나 나가는지 본다. 인증서 쪽에는 없는 축이다.
+        const ANNUITY_PANEL_LIMIT = 6;
+
+        function AnnuityPanel({ patents }) {
+            const all = useMemo(() => patents
+                .map(p => {
+                    const t = getIpType(p.rightType);
+                    if (t.renewable) {
+                        const due = trademarkRenewalDue(p);
+                        return due ? { id: p.id, name: p.name, due, dDay: diffDaysFromToday(due), fee: num(p.annuityFee), label: '갱신등록료' } : null;
+                    }
+                    const a = nextAnnuity(p);
+                    return a ? { id: p.id, name: p.name, due: a.due, dDay: diffDaysFromToday(a.due), fee: num(p.annuityFee), label: `${a.year}년차` } : null;
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.dDay - b.dDay), [patents]);
+
+            const rows = all.slice(0, ANNUITY_PANEL_LIMIT);
+
+            const yearTotal = useMemo(() => {
+                const limit = 365;
+                return patents.reduce((sum, p) => {
+                    const t = getIpType(p.rightType);
+                    const due = t.renewable ? trademarkRenewalDue(p) : (nextAnnuity(p) || {}).due;
+                    const d = diffDaysFromToday(due);
+                    return d !== null && d >= 0 && d <= limit ? sum + num(p.annuityFee) : sum;
+                }, 0);
+            }, [patents]);
+
+            return (
+                <div className="glass-panel p-6">
+                    <h3 className="font-bold text-gray-700 mb-1">특허 연차료 납부 예정</h3>
+                    <p className="text-[11px] text-gray-400 mb-4">
+                        설정등록 때 1~3년분을 함께 내고 그 다음 연차부터 매년 등록일 응당일 전까지 납부합니다.
+                        {all.length > rows.length && ` 기한이 빠른 ${rows.length}건만 표시합니다 (전체 ${all.length}건).`}
+                    </p>
+                    {rows.length === 0 ? (
+                        <p className="text-sm text-gray-400 py-8 text-center">등록일이 입력된 산업재산권이 없습니다.</p>
+                    ) : (
+                        <>
+                            <div className="space-y-2">
+                                {rows.map(r => (
+                                    <div key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm py-1.5 border-b border-gray-50 last:border-0">
+                                        <span className="font-medium text-gray-800 truncate max-w-[46%]" title={r.name}>{r.name}</span>
+                                        <span className="px-2 py-0.5 rounded bg-teal-50 text-teal-700 text-[10px] font-bold">{r.label}</span>
+                                        <span className="font-mono text-xs text-gray-500">{r.due}</span>
+                                        <DDayBadge dDay={r.dDay} />
+                                        <span className="ml-auto text-xs font-bold text-gray-700">{r.fee > 0 ? formatKrw(r.fee) : '-'}</span>
+                                    </div>
+                                ))}
+                            </div>
+                            <p className="mt-4 pt-3 border-t text-xs text-gray-500 flex justify-between">
+                                <span>향후 1년 예상 납부액</span><span className="font-bold text-gray-800">{formatKrw(yearTotal)}</span>
+                            </p>
+                        </>
+                    )}
+                </div>
+            );
+        }
+
+        // --- 대시보드 ---
+        function DashboardPage({ records, patents, alertStages, onDownloadReport, onGoAlerts }) {
+            const [alertWindow, setAlertWindow] = useState(alertStages[0] || 90);
+
+            useEffect(() => { setAlertWindow(alertStages[0] || 90); }, [alertStages]);
+
+            const dated = useMemo(() => records
+                .map(r => ({ ...r, dDay: diffDaysFromToday(r.actionDate) }))
+                .filter(r => r.dDay !== null), [records]);
+
+            const overdue = useMemo(() => dated.filter(r => r.dDay < 0).sort((a, b) => a.dDay - b.dDay), [dated]);
+            const upcoming = useMemo(() => dated.filter(r => r.dDay >= 0 && r.dDay <= alertWindow).sort((a, b) => a.dDay - b.dDay), [dated, alertWindow]);
+            const unacked = useMemo(() => records
+                .map(r => toAlert(r, alertStages))
+                .filter(a => a && !a.acked).length, [records, alertStages]);
+
+            const certCount = records.filter(r => r.kind === 'cert').length;
+            const patentCount = records.filter(r => r.kind === 'patent').length;
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <h2 className="text-2xl font-bold text-gray-800">현황 대시보드</h2>
+                        <button onClick={onDownloadReport} className="text-sm bg-slate-700 text-white px-3 py-1.5 rounded flex items-center gap-1 hover:bg-slate-800 w-fit">
+                            <Icons.Download /> 운영 리포트 CSV
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <StatCard title="보유 인증서" value={`${certCount}건`} subtext="인증·확인서 대장" color="blue" />
+                        <StatCard title="보유 산업재산권" value={`${patentCount}건`} subtext="특허·실용신안·디자인·상표" color="indigo" />
+                        <StatCard title="미확인 알림" value={`${unacked}건`} subtext="알림 센터에서 확인 처리" color="orange" onClick={onGoAlerts} />
+                        <StatCard title="기한 경과" value={`${overdue.length}건`} subtext="즉시 조치가 필요합니다" color="red" />
+                    </div>
+
+                    {overdue.length > 0 && (
+                        <div className="bg-slate-800 text-white rounded-lg p-4">
+                            <h4 className="font-bold text-sm mb-1 flex items-center gap-2"><Icons.Alert /> 기한 경과 ({overdue.length}건)</h4>
+                            <p className="text-[11px] text-slate-300 mb-3">인증이 이미 실효됐거나 연차료 납부기한이 지났습니다. 추가납부 기간이 있는지 확인하세요.</p>
+                            <div className="flex flex-wrap gap-2">
+                                {overdue.map(r => (
+                                    <div key={r.recordId} className="bg-slate-700 px-3 py-1.5 rounded text-xs">
+                                        <span className="font-bold mr-2">{r.title}</span>
+                                        <span className="font-mono text-slate-300">{r.actionDate}</span>
+                                        <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500 text-white">{Math.abs(r.dDay)}일 경과</span>
+                                        <span className="ml-1 text-[10px] text-amber-300">{r.actionLabel}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                            <h4 className="text-red-800 font-bold text-sm flex items-center gap-2"><Icons.Alert /> 갱신 대응 필요 (D-{alertWindow})</h4>
+                            <div className="flex flex-wrap gap-1">
+                                {alertStages.map(d => (
+                                    <button key={d} onClick={() => setAlertWindow(d)}
+                                        className={`px-2.5 py-1 rounded text-[11px] font-bold transition-colors ${alertWindow === d ? 'bg-red-600 text-white' : 'bg-white text-red-600 border border-red-200 hover:bg-red-100'}`}>
+                                        {d}일
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <p className="text-[11px] text-red-500 mb-3">환경설정에서 지정한 알림 단계로 끊어 봅니다.</p>
+                        {upcoming.length === 0 ? (
+                            <p className="text-xs text-red-400 py-2">{alertWindow}일 이내 대응할 항목이 없습니다.</p>
+                        ) : (
+                            <div className="flex flex-wrap gap-2">
+                                {upcoming.map(r => (
+                                    <div key={r.recordId} className="bg-white px-3 py-1.5 rounded border border-red-100 text-xs shadow-sm">
+                                        <span className="font-bold text-gray-700 mr-2">{r.title}</span>
+                                        <span className="text-red-500 font-mono font-bold">{r.actionDate}</span>
+                                        <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">D-{r.dDay}</span>
+                                        <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">{r.actionLabel}</span>
+                                        {r.manager && <span className="ml-1 text-[10px] text-gray-400">{r.manager}</span>}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <DeadlineTimeline records={records} />
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <DeadlineByYear records={records} />
+                        <IssuerChart records={records} />
+                        <AnnuityPanel patents={patents} />
+                        <div className="glass-panel p-6">
+                            <h3 className="font-bold text-gray-700 mb-1">구분별 보유 현황</h3>
+                            <p className="text-[11px] text-gray-400 mb-4">인증서는 구분별로, 산업재산권은 권리별로 묶었습니다.</p>
+                            {records.length === 0 ? (
+                                <p className="text-sm text-gray-400 py-8 text-center">등록된 항목이 없습니다.</p>
+                            ) : (
+                                <div className="space-y-3">
+                                    {(() => {
+                                        const map = new Map();
+                                        records.forEach(r => {
+                                            const key = r.badge || '기타';
+                                            if (!map.has(key)) map.set(key, { name: key, kind: r.kind, count: 0, urgent: 0 });
+                                            const g = map.get(key);
+                                            g.count += 1;
+                                            const d = diffDaysFromToday(r.actionDate);
+                                            if (d !== null && d <= 90) g.urgent += 1;
+                                        });
+                                        const rows = [...map.values()].sort((a, b) => b.count - a.count);
+                                        const max = Math.max(1, ...rows.map(r => r.count));
+                                        return rows.map(r => (
+                                            <div key={r.name}>
+                                                <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm mb-1">
+                                                    <span className="flex items-center gap-2">
+                                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${r.kind === 'cert' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                                            {r.kind === 'cert' ? '인증' : '권리'}
+                                                        </span>
+                                                        <span className="text-gray-700">{r.name}</span>
+                                                        <span className="font-bold text-gray-800">{r.count}건</span>
+                                                    </span>
+                                                    {r.urgent > 0 && <span className="text-[10px] font-bold text-red-600">D-90 이내 {r.urgent}건</span>}
+                                                </div>
+                                                <div className="h-2 bg-gray-100 rounded">
+                                                    <div className="h-2 rounded" style={{ width: (r.count / max) * 100 + '%', background: r.kind === 'cert' ? '#2563eb' : '#7c3aed' }}></div>
+                                                </div>
+                                            </div>
+                                        ));
+                                    })()}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 알림 센터 ---
+        // 사용자가 정한 단계(90/60/30/7일 등)에 걸린 항목을 모아 보여주고,
+        // '확인' 을 누르면 그 주기에서는 다시 뜨지 않는다.
+        function AlertCenterPage({ records, alertStages, onAck, onUnack }) {
+            const [showAcked, setShowAcked] = useState(false);
+
+            const alerts = useMemo(() => records
+                .map(r => toAlert(r, alertStages))
+                .filter(Boolean)
+                .sort((a, b) => a.dDay - b.dDay), [records, alertStages]);
+
+            const pending = alerts.filter(a => !a.acked);
+            const acked = alerts.filter(a => a.acked);
+
+            const groups = useMemo(() => {
+                const map = new Map();
+                pending.forEach(a => {
+                    const key = a.dDay < 0 ? 'overdue' : String(a.stage);
+                    if (!map.has(key)) map.set(key, { key, stage: a.dDay < 0 ? null : a.stage, items: [] });
+                    map.get(key).items.push(a);
+                });
+                return [...map.values()].sort((a, b) => {
+                    if (a.stage === null) return -1;
+                    if (b.stage === null) return 1;
+                    return a.stage - b.stage;
+                });
+            }, [pending]);
+
+            const list = showAcked ? acked : pending;
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <div>
+                            <h2 className="text-2xl font-bold text-gray-800">알림 센터</h2>
+                            <p className="text-sm text-gray-500 mt-1">
+                                환경설정의 알림 단계({alertStages.join(' / ')}일)에 걸린 항목입니다.
+                                확인 처리하면 목록에서 빠지고, 갱신해서 기한이 바뀌면 새 주기에 다시 뜹니다.
+                            </p>
+                        </div>
+                        <div className="flex gap-1">
+                            {[[false, `미확인 ${pending.length}`], [true, `확인완료 ${acked.length}`]].map(([v, label]) => (
+                                <button key={String(v)} onClick={() => setShowAcked(v)}
+                                    className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${showAcked === v ? 'bg-slate-800 text-white' : 'bg-white border text-slate-600 hover:bg-gray-50'}`}>
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    {!showAcked && groups.length > 0 && (
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            {groups.map(g => (
+                                <div key={g.key} className={`glass-panel p-4 border-l-4 ${g.stage === null ? 'border-red-600' : g.stage <= 30 ? 'border-red-500' : 'border-amber-500'}`}>
+                                    <p className="text-xs font-semibold text-gray-500">{g.stage === null ? '기한 경과' : `D-${g.stage} 단계`}</p>
+                                    <p className="text-2xl font-bold text-gray-900 mt-1">{g.items.length}건</p>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {list.length === 0 ? (
+                        <div className="glass-panel p-12 text-center text-gray-400 text-sm">
+                            {showAcked
+                                ? '확인 처리한 알림이 없습니다.'
+                                : records.length === 0
+                                    ? '등록된 항목이 없습니다. 인증서 관리 또는 특허 관리에서 먼저 등록하세요.'
+                                    : '지금 알림 단계에 걸린 항목이 없습니다.'}
+                        </div>
+                    ) : (
+                        <div className="glass-panel overflow-hidden divide-y">
+                            {list.map(a => (
+                                <div key={a.record.recordId} className="px-5 py-4 flex flex-wrap items-center gap-x-3 gap-y-2 hover:bg-gray-50">
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${a.record.kind === 'cert' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                        {a.record.kind === 'cert' ? '인증' : '권리'}
+                                    </span>
+                                    <span className="font-bold text-gray-900">{a.record.title}</span>
+                                    <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px]">{a.record.badge}</span>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">{a.record.actionLabel}</span>
+                                    <span className="font-mono text-xs text-gray-500">{a.record.actionDate}</span>
+                                    <DDayBadge dDay={a.dDay} />
+                                    <span className="text-[10px] text-gray-400">
+                                        {a.dDay < 0 ? '기한 경과' : `알림단계 D-${a.stage}`}
+                                    </span>
+                                    <span className="ml-auto flex items-center gap-2">
+                                        <span className="text-xs text-gray-400">{a.record.manager || '담당 미지정'}</span>
+                                        {a.acked ? (
+                                            <button onClick={() => onUnack(a.record, a.stage)}
+                                                className="text-xs font-bold text-slate-500 border px-2.5 py-1 rounded hover:bg-gray-100">확인 취소</button>
+                                        ) : (
+                                            <button onClick={() => onAck(a.record, a.stage)}
+                                                className="flex items-center gap-1 text-xs font-bold text-emerald-600 border border-emerald-200 bg-emerald-50 px-2.5 py-1 rounded hover:bg-emerald-100">
+                                                <Icons.Check /> 확인
+                                            </button>
+                                        )}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // --- 갱신 일정 ---
+        function SchedulePage({ records }) {
+            const [monthsAhead, setMonthsAhead] = useState(12);
+
+            const rows = useMemo(() => records
+                .map(r => ({ ...r, dDay: diffDaysFromToday(r.actionDate) })), [records]);
+
+            const undated = useMemo(() => rows.filter(r => r.dDay === null), [rows]);
+            const past = useMemo(() => rows.filter(r => r.dDay !== null && r.dDay < 0).sort((a, b) => a.dDay - b.dDay), [rows]);
+
+            const months = useMemo(() => {
+                const base = todayDateOnly();
+                const buckets = [];
+                for (let i = 0; i < monthsAhead; i++) {
+                    const d = new Date(base.getFullYear(), base.getMonth() + i, 1);
+                    buckets.push({ key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, year: d.getFullYear(), month: d.getMonth() + 1, items: [] });
+                }
+                const index = new Map(buckets.map(b => [b.key, b]));
+                rows.forEach(r => {
+                    if (r.dDay === null || r.dDay < 0) return;
+                    const bucket = index.get(String(r.actionDate).slice(0, 7));
+                    if (bucket) bucket.items.push(r);
+                });
+                buckets.forEach(b => b.items.sort((x, y) => x.dDay - y.dDay));
+                return buckets;
+            }, [rows, monthsAhead]);
+
+            // 연속으로 비어 있는 달은 한 줄로 접어 스크롤 낭비를 줄인다.
+            const grouped = useMemo(() => {
+                const groups = [];
+                months.forEach(m => {
+                    const isEmpty = m.items.length === 0;
+                    const last = groups[groups.length - 1];
+                    if (isEmpty && last && last.empty) last.months.push(m);
+                    else groups.push({ empty: isEmpty, months: [m] });
+                });
+                return groups;
+            }, [months]);
+
+            const upcoming = months.reduce((a, m) => a + m.items.length, 0);
+            const upcomingCost = months.reduce((a, m) => a + m.items.reduce((x, i) => x + num(i.cost), 0), 0);
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <h2 className="text-2xl font-bold text-gray-800">갱신 일정</h2>
+                        <div className="flex gap-1">
+                            {[6, 12, 24].map(m => (
+                                <button key={m} onClick={() => setMonthsAhead(m)}
+                                    className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${monthsAhead === m ? 'bg-slate-800 text-white' : 'bg-white border text-slate-600 hover:bg-gray-50'}`}>
+                                    {m}개월
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <StatCard title={`향후 ${monthsAhead}개월 기한`} value={`${upcoming}건`} subtext="대응이 필요한 인증·권리" color="blue" />
+                        <StatCard title="예상 연차료" value={`₩${upcomingCost.toLocaleString()}`} subtext="해당 기간 특허 연차료 합계" color="emerald" />
+                    </div>
+
+                    {past.length > 0 && (
+                        <div className="bg-slate-800 text-white rounded-lg p-4">
+                            <h4 className="font-bold text-sm mb-1 flex items-center gap-2"><Icons.Alert /> 기한 경과 ({past.length}건)</h4>
+                            <p className="text-[11px] text-slate-300 mb-3">일정에 잡히기 전에 먼저 정리해야 하는 건입니다.</p>
+                            <div className="space-y-1">
+                                {past.map(r => (
+                                    <div key={r.recordId} className="flex flex-wrap items-center gap-2 bg-slate-700 px-3 py-2 rounded text-xs">
+                                        <span className="font-bold">{r.title}</span>
+                                        <span className="font-mono text-slate-300">{r.actionDate}</span>
+                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500">{Math.abs(r.dDay)}일 경과</span>
+                                        <span className="text-[10px] text-amber-300">{r.actionLabel}</span>
+                                        <span className="ml-auto text-slate-300">{r.manager || '담당 미지정'}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="space-y-4">
+                        {grouped.map(group => {
+                            if (group.empty) {
+                                const first = group.months[0], last = group.months[group.months.length - 1];
+                                const range = group.months.length === 1
+                                    ? `${first.year}년 ${first.month}월`
+                                    : `${first.year}년 ${first.month}월 ~ ${last.year}년 ${last.month}월`;
+                                return (
+                                    <div key={'empty-' + first.key} className="flex items-center gap-3 px-5 py-2.5 rounded-lg border border-dashed border-gray-200 text-xs text-gray-400">
+                                        <span className="font-medium text-gray-500">{range}</span><span>기한 도래 없음</span>
+                                        <span className="ml-auto">{group.months.length}개월</span>
+                                    </div>
+                                );
+                            }
+                            const m = group.months[0];
+                            const cost = m.items.reduce((a, i) => a + num(i.cost), 0);
+                            return (
+                                <div key={m.key} className="glass-panel overflow-hidden">
+                                    <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 bg-gray-50 border-b">
+                                        <div className="flex items-baseline gap-2">
+                                            <span className="font-bold text-gray-800">{m.year}년 {m.month}월</span>
+                                            <span className="text-xs text-gray-500">{m.items.length}건</span>
+                                        </div>
+                                        {cost > 0 && <span className="text-xs font-bold text-emerald-600">예상 연차료 ₩{cost.toLocaleString()}</span>}
+                                    </div>
+                                    <div className="divide-y">
+                                        {m.items.map(r => (
+                                            <div key={r.recordId} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm hover:bg-gray-50">
+                                                <span className="font-mono text-xs text-gray-500 w-24">{r.actionDate}</span>
+                                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${r.kind === 'cert' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                                    {r.kind === 'cert' ? '인증' : '권리'}
+                                                </span>
+                                                <span className="font-medium text-gray-900">{r.title}</span>
+                                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">{r.actionLabel}</span>
+                                                <DDayBadge dDay={r.dDay} />
+                                                <span className="ml-auto text-xs text-gray-400">{r.manager || '담당 미지정'}</span>
+                                                {num(r.cost) > 0 && <span className="text-xs font-bold text-gray-700 w-24 text-right">{formatKrw(r.cost)}</span>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    {undated.length > 0 && (
+                        <div className="glass-panel p-5">
+                            <h4 className="font-bold text-sm text-gray-700 mb-1">기한 미설정 ({undated.length}건)</h4>
+                            <p className="text-[11px] text-gray-400 mb-3">만료일 또는 등록일이 없어 일정과 알림에 잡히지 않습니다. 날짜를 채워주세요.</p>
+                            <div className="flex flex-wrap gap-2">
+                                {undated.map(r => <span key={r.recordId} className="px-3 py-1.5 rounded border text-xs text-gray-600">{r.title}</span>)}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // --- 인증서 관리 ---
+        function CertManagement({ certs, onAdd, onUpdate, onDelete, onRenew, alertStages }) {
+            const [form, setForm] = useState({ ...EMPTY_CERT_FORM });
+            const [editId, setEditId] = useState(null);
+            const [search, setSearch] = useState('');
+            const [page, setPage] = useState(1);
+            const [pageSize, setPageSize] = useState(10);
+            const formRef = useRef(null);
+            const listRef = useRef(null);
+
+            const filtered = useMemo(() => {
+                const q = search.trim().toLowerCase();
+                const rows = [...certs].sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko'));
+                if (!q) return rows;
+                return rows.filter(c => [c.name, c.issuer, c.certNo, c.category, c.manager].join(' ').toLowerCase().includes(q));
+            }, [certs, search]);
+
+            const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+            const safePage = Math.min(page, totalPages);
+            const startIndex = (safePage - 1) * pageSize;
+            const pageRows = filtered.slice(startIndex, startIndex + pageSize);
+
+            useEffect(() => { setPage(1); }, [search, pageSize]);
+            useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+
+            const goPage = (next) => {
+                setPage(Math.min(Math.max(1, next), totalPages));
+                listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+
+            const reset = () => { setForm({ ...EMPTY_CERT_FORM }); setEditId(null); };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (!form.name.trim()) return;
+                if (form.acquiredDate && form.expiryDate && form.acquiredDate > form.expiryDate) {
+                    alert('취득일이 만료일보다 늦습니다.');
+                    return;
+                }
+                if (editId) onUpdate(editId, { ...form }); else onAdd({ ...form });
+                reset();
+            };
+
+            const startEdit = (c) => {
+                setEditId(c.id);
+                setForm({ ...EMPTY_CERT_FORM, ...c });
+                formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+
+            const handleDownload = () => {
+                downloadCSV([
+                    ['인증명', '구분', '인증기관', '인증번호', '취득일', '만료일', '남은일수', '개별알림단계', '담당자', '문서링크', '비고'],
+                    ...filtered.map(c => {
+                        const d = diffDaysFromToday(c.expiryDate);
+                        return [
+                            c.name, c.category || '', c.issuer || '', c.certNo || '',
+                            c.acquiredDate || '', c.expiryDate || '',
+                            d === null ? '' : d, c.alertDays || '',
+                            c.manager || '', c.docLink || '', c.memo || '',
+                        ];
+                    })
+                ], 'certifications.csv');
+            };
+
+            const field = (label, node) => (
+                <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">{label}</label>{node}</div>
+            );
+            const input = (key, props = {}) => (
+                <input className="w-full border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                    value={form[key]} onChange={e => setForm({ ...form, [key]: e.target.value })} {...props} />
+            );
+
+            const formStages = parseStages(form.alertDays);
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex flex-wrap justify-between items-center gap-3">
+                        <h2 className="text-2xl font-bold text-gray-800">인증서 관리</h2>
+                        <button onClick={handleDownload} className="text-sm bg-green-600 text-white px-3 py-1.5 rounded flex items-center gap-1 hover:bg-green-700"><Icons.Download /> 엑셀 다운로드</button>
+                    </div>
+
+                    <div className="flex gap-6 flex-col lg:flex-row">
+                        <div ref={formRef} className="glass-panel p-6 w-full lg:w-[380px] lg:shrink-0 h-fit">
+                            <h3 className="font-semibold text-gray-700 mb-4">{editId ? '인증 정보 수정' : '신규 인증 등록'}</h3>
+                            <form onSubmit={handleSubmit} className="space-y-3">
+                                {input('name', { placeholder: '인증명 (예: 이노비즈 인증)', required: true })}
+                                <div className="grid grid-cols-2 gap-2">
+                                    {field('구분', (
+                                        <select className="w-full border rounded px-3 py-2 text-sm bg-white" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+                                            {CERT_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    ))}
+                                    {field('인증번호', input('certNo', { placeholder: '번호' }))}
+                                </div>
+                                {field('인증기관', input('issuer', { placeholder: '예: 기술보증기금' }))}
+
+                                <div className="grid grid-cols-2 gap-2">
+                                    {field('취득일', input('acquiredDate', { type: 'date' }))}
+                                    {field('만료일', input('expiryDate', { type: 'date' }))}
+                                </div>
+                                {form.acquiredDate && form.expiryDate && form.acquiredDate > form.expiryDate && (
+                                    <p className="text-[10px] text-red-500 -mt-1 ml-1">취득일이 만료일보다 늦습니다.</p>
+                                )}
+                                {form.expiryDate && (
+                                    <p className="text-[10px] text-blue-600 font-bold -mt-1 ml-1">
+                                        만료까지 {(() => { const d = diffDaysFromToday(form.expiryDate); return d < 0 ? `${Math.abs(d)}일 경과` : `${d}일`; })()}
+                                    </p>
+                                )}
+
+                                <div className="bg-amber-50 p-3 rounded border border-amber-100">
+                                    <label className="text-[10px] text-amber-700 block mb-1 font-bold">개별 알림 단계 (일, 쉼표 구분)</label>
+                                    <input className="w-full border rounded px-3 py-1.5 text-sm"
+                                        placeholder={`비우면 공통 설정 (${alertStages.join(', ')})`}
+                                        value={form.alertDays} onChange={e => setForm({ ...form, alertDays: e.target.value })} />
+                                    <p className="text-[10px] text-amber-600 mt-1">
+                                        {formStages.length
+                                            ? `이 인증만 만료 ${formStages.sort((a, b) => b - a).join(' / ')}일 전에 알립니다.`
+                                            : `공통 설정(${alertStages.join(' / ')}일 전)을 따릅니다.`}
+                                    </p>
+                                </div>
+
+                                {input('manager', { placeholder: '사내 담당자' })}
+                                {field('증빙 문서 링크', input('docLink', { placeholder: '사내 문서함 URL (선택)' }))}
+                                <p className="text-[10px] text-gray-400 -mt-1 ml-1">이 앱은 파일을 올리지 않습니다. 증빙은 사내 문서함에 두고 링크만 남겨 주세요.</p>
+                                <textarea className="w-full border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" rows="2"
+                                    placeholder="비고" value={form.memo} onChange={e => setForm({ ...form, memo: e.target.value })} />
+
+                                <button className="w-full bg-blue-600 text-white py-2 rounded font-bold hover:bg-blue-700">{editId ? '수정 저장' : '등록'}</button>
+                                {editId && <button type="button" onClick={reset} className="w-full text-xs text-gray-400">취소</button>}
+                            </form>
+                        </div>
+
+                        <div ref={listRef} className="flex-1 space-y-3 min-w-0">
+                            <div className="flex flex-col sm:flex-row gap-2">
+                                <div className="relative flex-1">
+                                    <input type="text" placeholder="인증명, 기관, 번호, 담당자 검색..." value={search} onChange={e => setSearch(e.target.value)}
+                                        className="w-full pl-8 pr-3 py-2 text-sm border rounded bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                                    <span className="absolute left-2.5 top-2.5 text-gray-400"><Icons.Search /></span>
+                                </div>
+                                <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
+                                    className="border rounded px-3 py-2 text-sm bg-white sm:w-32">
+                                    {[10, 20, 50].map(n => <option key={n} value={n}>{n}개씩</option>)}
+                                </select>
+                            </div>
+
+                            {filtered.length > 0 && (
+                                <p className="text-xs text-gray-500">
+                                    총 {filtered.length}건 중 {startIndex + 1}~{Math.min(startIndex + pageSize, filtered.length)}건
+                                    {search && <span className="text-gray-400"> · 검색: {search}</span>}
+                                </p>
+                            )}
+
+                            {filtered.length === 0 ? (
+                                <div className="glass-panel p-12 text-center text-gray-400 text-sm">
+                                    {certs.length === 0 ? '등록된 인증서가 없습니다. 왼쪽 양식으로 첫 인증을 추가하세요.' : '검색 결과가 없습니다.'}
+                                </div>
+                            ) : pageRows.map(c => {
+                                const dDay = diffDaysFromToday(c.expiryDate);
+                                const history = Array.isArray(c.history) ? c.history : [];
+                                return (
+                                    <div key={c.id} className="glass-panel p-5">
+                                        <div className="flex flex-wrap items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <h4 className="font-bold text-gray-900">{c.name}</h4>
+                                                    <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px]">{c.category}</span>
+                                                    <DDayBadge dDay={dDay} />
+                                                </div>
+                                                {c.issuer && <p className="text-xs text-gray-500 mt-1">{c.issuer}{c.certNo ? ` · ${c.certNo}` : ''}</p>}
+                                            </div>
+                                            <div className="flex items-center gap-3 shrink-0">
+                                                <button onClick={() => onRenew(c)} title="갱신 처리"
+                                                    className="flex items-center gap-1 text-xs font-bold text-emerald-600 border border-emerald-200 bg-emerald-50 px-2.5 py-1 rounded hover:bg-emerald-100">
+                                                    <Icons.Refresh /> 갱신 처리
+                                                </button>
+                                                <button onClick={() => startEdit(c)} className="text-blue-400 hover:text-blue-600"><Icons.Edit /></button>
+                                                <button onClick={() => onDelete(c.id)} className="text-red-300 hover:text-red-500"><Icons.Trash /></button>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 mt-4 text-sm">
+                                            <div><p className="text-[10px] text-gray-400">취득일</p><p className="text-gray-800">{c.acquiredDate || '-'}</p></div>
+                                            <div><p className="text-[10px] text-gray-400">만료일</p><p className="text-amber-700 font-medium">{c.expiryDate || '-'}</p></div>
+                                            <div><p className="text-[10px] text-gray-400">담당자</p><p className="text-gray-800">{c.manager || '-'}</p></div>
+                                            <div><p className="text-[10px] text-gray-400">알림 단계</p>
+                                                <p className="text-gray-800">{parseStages(c.alertDays).length ? parseStages(c.alertDays).sort((a, b) => b - a).join(' / ') + '일' : '공통 설정'}</p></div>
+                                            {c.docLink && (
+                                                <div><p className="text-[10px] text-gray-400">증빙 문서</p>
+                                                    <a href={c.docLink} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-xs break-all">링크 열기</a></div>
+                                            )}
+                                        </div>
+                                        {history.length > 0 && (
+                                            <p className="mt-3 pt-3 border-t text-[11px] text-gray-400">갱신 이력 {history.length}건 · 최근 {history[history.length - 1].acquiredDate || '-'} 취득</p>
+                                        )}
+                                        {c.memo && <p className="mt-3 pt-3 border-t text-xs text-gray-500 whitespace-pre-wrap">{c.memo}</p>}
+                                    </div>
+                                );
+                            })}
+
+                            <Pagination page={safePage} totalPages={totalPages} onGo={goPage} />
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 특허 관리 ---
+        function PatentManagement({ patents, onAdd, onUpdate, onDelete, onPay, alertStages }) {
+            const [form, setForm] = useState({ ...EMPTY_PATENT_FORM });
+            const [editId, setEditId] = useState(null);
+            const [search, setSearch] = useState('');
+            const [page, setPage] = useState(1);
+            const [pageSize, setPageSize] = useState(10);
+            const formRef = useRef(null);
+            const listRef = useRef(null);
+
+            const filtered = useMemo(() => {
+                const q = search.trim().toLowerCase();
+                const rows = [...patents].sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko'));
+                if (!q) return rows;
+                return rows.filter(p => [p.name, p.applicationNo, p.registrationNo, p.agent, p.manager, getIpType(p.rightType).label].join(' ').toLowerCase().includes(q));
+            }, [patents, search]);
+
+            const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+            const safePage = Math.min(page, totalPages);
+            const startIndex = (safePage - 1) * pageSize;
+            const pageRows = filtered.slice(startIndex, startIndex + pageSize);
+
+            useEffect(() => { setPage(1); }, [search, pageSize]);
+            useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+
+            const goPage = (next) => {
+                setPage(Math.min(Math.max(1, next), totalPages));
+                listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+
+            const reset = () => { setForm({ ...EMPTY_PATENT_FORM }); setEditId(null); };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (!form.name.trim()) return;
+                if (form.applicationDate && form.registrationDate && form.applicationDate > form.registrationDate) {
+                    alert('출원일이 등록일보다 늦습니다.');
+                    return;
+                }
+                if (editId) onUpdate(editId, { ...form }); else onAdd({ ...form });
+                reset();
+            };
+
+            const startEdit = (p) => {
+                setEditId(p.id);
+                setForm({ ...EMPTY_PATENT_FORM, ...p });
+                formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+
+            const handleDownload = () => {
+                downloadCSV([
+                    ['발명의명칭', '권리구분', '출원번호', '출원일', '등록번호', '등록일', '납부완료연차', '연차료',
+                     '다음기한', '기한구분', '존속기간만료일', '대리인', '개별알림단계', '담당자', '문서링크', '비고'],
+                    ...filtered.map(p => {
+                        const rec = toRecord({ ...p, id: p.id }, 'patent');
+                        return [
+                            p.name, getIpType(p.rightType).label,
+                            p.applicationNo || '', p.applicationDate || '',
+                            p.registrationNo || '', p.registrationDate || '',
+                            p.paidThroughYear || '', num(p.annuityFee),
+                            rec.actionDate || '', rec.actionLabel || '', patentTermEnd(p) || '',
+                            p.agent || '', p.alertDays || '', p.manager || '', p.docLink || '', p.memo || '',
+                        ];
+                    })
+                ], 'patents.csv');
+            };
+
+            const field = (label, node) => (
+                <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">{label}</label>{node}</div>
+            );
+            const input = (key, props = {}) => (
+                <input className="w-full border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                    value={form[key]} onChange={e => setForm({ ...form, [key]: props.type === 'number' ? (parseInt(e.target.value) || 0) : e.target.value })} {...props} />
+            );
+
+            const formType = getIpType(form.rightType);
+            const formNext = formType.renewable
+                ? (form.registrationDate ? { year: null, due: trademarkRenewalDue(form) } : null)
+                : nextAnnuity(form);
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex flex-wrap justify-between items-center gap-3">
+                        <h2 className="text-2xl font-bold text-gray-800">특허 관리</h2>
+                        <button onClick={handleDownload} className="text-sm bg-green-600 text-white px-3 py-1.5 rounded flex items-center gap-1 hover:bg-green-700"><Icons.Download /> 엑셀 다운로드</button>
+                    </div>
+
+                    <div className="flex gap-6 flex-col lg:flex-row">
+                        <div ref={formRef} className="glass-panel p-6 w-full lg:w-[380px] lg:shrink-0 h-fit">
+                            <h3 className="font-semibold text-gray-700 mb-4">{editId ? '권리 정보 수정' : '신규 권리 등록'}</h3>
+                            <form onSubmit={handleSubmit} className="space-y-3">
+                                {input('name', { placeholder: '발명의 명칭 / 상표명', required: true })}
+                                {field('권리 구분', (
+                                    <select className="w-full border rounded px-3 py-2 text-sm bg-white" value={form.rightType} onChange={e => setForm({ ...form, rightType: e.target.value })}>
+                                        {IP_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                                    </select>
+                                ))}
+                                <p className="text-[10px] text-gray-400 -mt-1 ml-1">
+                                    {formType.renewable
+                                        ? `존속기간 ${formType.termYears}년 (등록일 기준) · 갱신등록으로 연장 가능`
+                                        : `존속기간 ${formType.termYears}년 (출원일 기준) · 매년 연차료 납부`}
+                                </p>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                    {field('출원번호', input('applicationNo', { placeholder: '10-2020-...' }))}
+                                    {field('출원일', input('applicationDate', { type: 'date' }))}
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {field('등록번호', input('registrationNo', { placeholder: '10-...' }))}
+                                    {field('등록일', input('registrationDate', { type: 'date' }))}
+                                </div>
+                                {form.applicationDate && form.registrationDate && form.applicationDate > form.registrationDate && (
+                                    <p className="text-[10px] text-red-500 -mt-1 ml-1">출원일이 등록일보다 늦습니다.</p>
+                                )}
+                                {patentTermEnd(form) && (
+                                    <p className="text-[10px] text-gray-500 -mt-1 ml-1">존속기간 만료일 {patentTermEnd(form)}</p>
+                                )}
+
+                                <div className="bg-teal-50 p-3 rounded border border-teal-100 space-y-2">
+                                    <p className="text-[10px] font-bold text-teal-800">연차료</p>
+                                    {formType.renewable ? (
+                                        <p className="text-[11px] text-teal-700">
+                                            상표는 연차료 대신 {formType.termYears}년마다 갱신등록료를 냅니다.
+                                            {formNext && formNext.due && <span className="block font-bold mt-1">갱신 기한 {formNext.due}</span>}
+                                        </p>
+                                    ) : (
+                                        <>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <div><label className="text-[10px] text-teal-700 block mb-1">납부 완료 연차</label>
+                                                    <input type="number" min="0" className="w-full border rounded px-3 py-1.5 text-sm"
+                                                        value={form.paidThroughYear} onChange={e => setForm({ ...form, paidThroughYear: parseInt(e.target.value) || 0 })} /></div>
+                                                <div><label className="text-[10px] text-teal-700 block mb-1">연차료 (원)</label>
+                                                    <input type="number" min="0" className="w-full border rounded px-3 py-1.5 text-sm"
+                                                        value={form.annuityFee} onChange={e => setForm({ ...form, annuityFee: parseInt(e.target.value) || 0 })} /></div>
+                                            </div>
+                                            {formNext ? (
+                                                <p className="text-[10px] text-teal-700 font-bold">다음 납부: {formNext.year}년차 · {formNext.due}</p>
+                                            ) : (
+                                                <p className="text-[10px] text-teal-600">등록일을 입력하면 다음 납부기한을 계산합니다.</p>
+                                            )}
+                                            <p className="text-[10px] text-teal-600">설정등록 때 1~3년분을 함께 내므로 보통 3부터 시작합니다.</p>
+                                        </>
+                                    )}
+                                </div>
+
+                                {field('대리인 (특허사무소)', input('agent', { placeholder: '예: ○○특허법률사무소' }))}
+
+                                <div className="bg-amber-50 p-3 rounded border border-amber-100">
+                                    <label className="text-[10px] text-amber-700 block mb-1 font-bold">개별 알림 단계 (일, 쉼표 구분)</label>
+                                    <input className="w-full border rounded px-3 py-1.5 text-sm"
+                                        placeholder={`비우면 공통 설정 (${alertStages.join(', ')})`}
+                                        value={form.alertDays} onChange={e => setForm({ ...form, alertDays: e.target.value })} />
+                                </div>
+
+                                {input('manager', { placeholder: '사내 담당자' })}
+                                {field('증빙 문서 링크', input('docLink', { placeholder: '사내 문서함 URL (선택)' }))}
+                                <p className="text-[10px] text-gray-400 -mt-1 ml-1">이 앱은 파일을 올리지 않습니다. 등록원부·공보는 링크로 남겨 주세요.</p>
+                                <textarea className="w-full border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" rows="2"
+                                    placeholder="비고" value={form.memo} onChange={e => setForm({ ...form, memo: e.target.value })} />
+
+                                <button className="w-full bg-blue-600 text-white py-2 rounded font-bold hover:bg-blue-700">{editId ? '수정 저장' : '등록'}</button>
+                                {editId && <button type="button" onClick={reset} className="w-full text-xs text-gray-400">취소</button>}
+                            </form>
+                        </div>
+
+                        <div ref={listRef} className="flex-1 space-y-3 min-w-0">
+                            <div className="flex flex-col sm:flex-row gap-2">
+                                <div className="relative flex-1">
+                                    <input type="text" placeholder="명칭, 출원·등록번호, 대리인 검색..." value={search} onChange={e => setSearch(e.target.value)}
+                                        className="w-full pl-8 pr-3 py-2 text-sm border rounded bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                                    <span className="absolute left-2.5 top-2.5 text-gray-400"><Icons.Search /></span>
+                                </div>
+                                <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
+                                    className="border rounded px-3 py-2 text-sm bg-white sm:w-32">
+                                    {[10, 20, 50].map(n => <option key={n} value={n}>{n}개씩</option>)}
+                                </select>
+                            </div>
+
+                            {filtered.length > 0 && (
+                                <p className="text-xs text-gray-500">
+                                    총 {filtered.length}건 중 {startIndex + 1}~{Math.min(startIndex + pageSize, filtered.length)}건
+                                    {search && <span className="text-gray-400"> · 검색: {search}</span>}
+                                </p>
+                            )}
+
+                            {filtered.length === 0 ? (
+                                <div className="glass-panel p-12 text-center text-gray-400 text-sm">
+                                    {patents.length === 0 ? '등록된 산업재산권이 없습니다. 왼쪽 양식으로 첫 권리를 추가하세요.' : '검색 결과가 없습니다.'}
+                                </div>
+                            ) : pageRows.map(p => {
+                                const t = getIpType(p.rightType);
+                                const rec = toRecord(p, 'patent');
+                                const dDay = diffDaysFromToday(rec.actionDate);
+                                const history = Array.isArray(p.history) ? p.history : [];
+                                return (
+                                    <div key={p.id} className="glass-panel p-5">
+                                        <div className="flex flex-wrap items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <h4 className="font-bold text-gray-900">{p.name}</h4>
+                                                    <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-700 text-[10px] font-bold">{t.label}</span>
+                                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">{rec.actionLabel}</span>
+                                                    <DDayBadge dDay={dDay} />
+                                                </div>
+                                                <p className="text-xs text-gray-500 mt-1">
+                                                    {p.registrationNo ? `등록 ${p.registrationNo}` : (p.applicationNo ? `출원 ${p.applicationNo}` : '번호 미입력')}
+                                                    {p.agent ? ` · ${p.agent}` : ''}
+                                                </p>
+                                            </div>
+                                            <div className="flex items-center gap-3 shrink-0">
+                                                {!t.renewable && (
+                                                    <button onClick={() => onPay(p)} title="연차료 납부 처리"
+                                                        className="flex items-center gap-1 text-xs font-bold text-teal-600 border border-teal-200 bg-teal-50 px-2.5 py-1 rounded hover:bg-teal-100">
+                                                        <Icons.Check /> 연차료 납부
+                                                    </button>
+                                                )}
+                                                <button onClick={() => startEdit(p)} className="text-blue-400 hover:text-blue-600"><Icons.Edit /></button>
+                                                <button onClick={() => onDelete(p.id)} className="text-red-300 hover:text-red-500"><Icons.Trash /></button>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 mt-4 text-sm">
+                                            <div><p className="text-[10px] text-gray-400">출원일</p><p className="text-gray-800">{p.applicationDate || '-'}</p></div>
+                                            <div><p className="text-[10px] text-gray-400">등록일</p><p className="text-gray-800">{p.registrationDate || '-'}</p></div>
+                                            <div><p className="text-[10px] text-gray-400">{rec.actionLabel}</p><p className="text-amber-700 font-medium">{rec.actionDate || '-'}</p></div>
+                                            <div><p className="text-[10px] text-gray-400">존속기간 만료</p><p className="text-gray-800">{patentTermEnd(p) || '-'}</p></div>
+                                            {!t.renewable && (
+                                                <div><p className="text-[10px] text-gray-400">납부 완료</p><p className="text-gray-800">{p.paidThroughYear || 0}년차까지</p></div>
+                                            )}
+                                            <div><p className="text-[10px] text-gray-400">{t.renewable ? '갱신등록료' : '연차료'}</p><p className="text-gray-900 font-bold">{num(p.annuityFee) > 0 ? formatKrw(p.annuityFee) : '-'}</p></div>
+                                            <div><p className="text-[10px] text-gray-400">담당자</p><p className="text-gray-800">{p.manager || '-'}</p></div>
+                                            {p.docLink && (
+                                                <div><p className="text-[10px] text-gray-400">증빙 문서</p>
+                                                    <a href={p.docLink} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-xs break-all">링크 열기</a></div>
+                                            )}
+                                        </div>
+                                        {history.length > 0 && (
+                                            <p className="mt-3 pt-3 border-t text-[11px] text-gray-400">
+                                                납부 이력 {history.length}건 · 최근 {history[history.length - 1].year}년차 {history[history.length - 1].paidAt}
+                                            </p>
+                                        )}
+                                        {p.memo && <p className="mt-3 pt-3 border-t text-xs text-gray-500 whitespace-pre-wrap">{p.memo}</p>}
+                                    </div>
+                                );
+                            })}
+
+                            <Pagination page={safePage} totalPages={totalPages} onGo={goPage} />
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 인증 갱신 처리 모달 ---
+        // 현재 취득일/만료일을 이력으로 넘기고 새 주기를 입력받는다.
+        function RenewCertModal({ cert, onClose, onSubmit }) {
+            const [form, setForm] = useState({
+                acquiredDate: cert.expiryDate || '',
+                expiryDate: '',
+                certNo: cert.certNo || '',
+            });
+
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in" onClick={onClose}>
+                    <div className="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+                            <h3 className="font-bold text-gray-800">{cert.name} 갱신 처리</h3>
+                            <button onClick={onClose} className="hover:bg-gray-200 p-1 rounded"><Icons.XMark /></button>
+                        </div>
+                        <form className="p-5 space-y-3" onSubmit={(e) => { e.preventDefault(); onSubmit(form); }}>
+                            <div className="bg-slate-50 border rounded p-3 text-xs text-slate-600">
+                                <p className="font-bold text-slate-700 mb-1">현재 정보 (이력으로 이동)</p>
+                                <p>{cert.acquiredDate || '-'} ~ {cert.expiryDate || '-'}</p>
+                                <p>{cert.issuer || '기관 미입력'}{cert.certNo ? ` · ${cert.certNo}` : ''}</p>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                                <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">새 취득일</label>
+                                    <input type="date" required className="w-full border rounded px-3 py-2 text-sm" value={form.acquiredDate} onChange={e => setForm({ ...form, acquiredDate: e.target.value })} /></div>
+                                <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">새 만료일</label>
+                                    <input type="date" required className="w-full border rounded px-3 py-2 text-sm" value={form.expiryDate} onChange={e => setForm({ ...form, expiryDate: e.target.value })} /></div>
+                            </div>
+                            {form.acquiredDate && form.expiryDate && form.acquiredDate > form.expiryDate && (
+                                <p className="text-[10px] text-red-500 ml-1">취득일이 만료일보다 늦습니다.</p>
+                            )}
+                            <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">인증번호 (바뀐 경우)</label>
+                                <input className="w-full border rounded px-3 py-2 text-sm" value={form.certNo} onChange={e => setForm({ ...form, certNo: e.target.value })} /></div>
+
+                            <p className="text-[11px] text-gray-400 ml-1">갱신하면 이 인증의 알림 확인 기록이 초기화되고 새 만료일 기준으로 다시 알립니다.</p>
+
+                            <div className="flex justify-end gap-2 pt-2">
+                                <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-500">취소</button>
+                                <button type="submit" className="bg-emerald-600 text-white px-5 py-2 rounded font-bold text-sm hover:bg-emerald-700">갱신 처리</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 연차료 납부 처리 모달 ---
+        function PayAnnuityModal({ patent, onClose, onSubmit }) {
+            const next = nextAnnuity(patent);
+            const [form, setForm] = useState({
+                years: 1,
+                paidAt: toDateString(todayDateOnly()),
+                fee: num(patent.annuityFee),
+            });
+
+            if (!next) {
+                return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in" onClick={onClose}>
+                        <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 text-center" onClick={e => e.stopPropagation()}>
+                            <p className="text-sm text-gray-600">
+                                {patent.registrationDate
+                                    ? '존속기간이 끝나 더 낼 연차료가 없습니다.'
+                                    : '등록일을 먼저 입력해야 연차료를 계산할 수 있습니다.'}
+                            </p>
+                            <button onClick={onClose} className="mt-4 bg-gray-200 px-4 py-2 rounded text-sm">닫기</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            const paid = Math.max(0, parseInt(patent.paidThroughYear) || 0);
+            const years = Math.max(1, parseInt(form.years) || 1);
+            const nextDue = addYears(patent.registrationDate, paid + years);
+            const termEnd = patentTermEnd(patent);
+
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in" onClick={onClose}>
+                    <div className="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+                            <h3 className="font-bold text-gray-800">{patent.name} 연차료 납부</h3>
+                            <button onClick={onClose} className="hover:bg-gray-200 p-1 rounded"><Icons.XMark /></button>
+                        </div>
+                        <form className="p-5 space-y-3" onSubmit={(e) => { e.preventDefault(); onSubmit({ ...form, years }); }}>
+                            <div className="bg-slate-50 border rounded p-3 text-xs text-slate-600">
+                                <p className="font-bold text-slate-700 mb-1">현재 상태</p>
+                                <p>{paid}년차까지 납부 완료 · 다음은 {next.year}년차</p>
+                                <p>납부기한 {next.due}{termEnd ? ` · 존속기간 만료 ${termEnd}` : ''}</p>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                                <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">납부 연차 수</label>
+                                    <input type="number" min="1" className="w-full border rounded px-3 py-2 text-sm" value={form.years} onChange={e => setForm({ ...form, years: parseInt(e.target.value) || 1 })} /></div>
+                                <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">납부일</label>
+                                    <input type="date" required className="w-full border rounded px-3 py-2 text-sm" value={form.paidAt} onChange={e => setForm({ ...form, paidAt: e.target.value })} /></div>
+                            </div>
+                            <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">납부 금액 (원)</label>
+                                <input type="number" min="0" className="w-full border rounded px-3 py-2 text-sm" value={form.fee} onChange={e => setForm({ ...form, fee: parseInt(e.target.value) || 0 })} /></div>
+
+                            <p className="text-xs text-teal-700 font-bold ml-1">
+                                {next.year}년차{years > 1 ? ` ~ ${next.year + years - 1}년차` : ''} 납부 처리 · 다음 기한 {nextDue}
+                                {termEnd && nextDue > termEnd && <span className="block text-gray-400 font-normal">존속기간이 먼저 끝납니다.</span>}
+                            </p>
+
+                            <div className="flex justify-end gap-2 pt-2">
+                                <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-500">취소</button>
+                                <button type="submit" className="bg-teal-600 text-white px-5 py-2 rounded font-bold text-sm hover:bg-teal-700">납부 처리</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 기관별 현황 ---
+        function IssuerPage({ records }) {
+            const groups = useMemo(() => {
+                const map = new Map();
+                records.forEach(r => {
+                    const key = (r.org || '').trim() || '(기관·대리인 미입력)';
+                    if (!map.has(key)) map.set(key, { name: key, items: [] });
+                    map.get(key).items.push(r);
+                });
+                return [...map.values()]
+                    .map(g => ({
+                        ...g,
+                        certCount: g.items.filter(i => i.kind === 'cert').length,
+                        patentCount: g.items.filter(i => i.kind === 'patent').length,
+                        cost: g.items.reduce((a, i) => a + num(i.cost), 0),
+                        nextAction: g.items
+                            .map(i => ({ title: i.title, date: i.actionDate, dDay: diffDaysFromToday(i.actionDate), label: i.actionLabel }))
+                            .filter(x => x.dDay !== null)
+                            .sort((a, b) => a.dDay - b.dDay)[0] || null,
+                    }))
+                    .sort((a, b) => b.items.length - a.items.length);
+            }, [records]);
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div>
+                        <h2 className="text-2xl font-bold text-gray-800">기관별 현황</h2>
+                        <p className="text-sm text-gray-500 mt-1">인증기관과 특허 대리인 기준으로 묶어 봅니다. 같은 곳에 여러 건이 걸려 있으면 한 번에 처리하는 편이 낫습니다.</p>
+                    </div>
+
+                    {groups.length === 0 ? (
+                        <div className="glass-panel p-12 text-center text-gray-400 text-sm">등록된 항목이 없습니다.</div>
+                    ) : groups.map(g => (
+                        <div key={g.name} className="glass-panel p-5">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <h4 className="font-bold text-gray-900">{g.name}</h4>
+                                <div className="flex flex-wrap gap-4 text-sm">
+                                    <div className="text-right"><p className="text-[10px] text-gray-400">인증</p><p className="font-bold text-gray-800">{g.certCount}건</p></div>
+                                    <div className="text-right"><p className="text-[10px] text-gray-400">산업재산권</p><p className="font-bold text-gray-800">{g.patentCount}건</p></div>
+                                    <div className="text-right"><p className="text-[10px] text-gray-400">연차료 합계</p><p className="font-bold text-gray-900">{g.cost > 0 ? formatKrw(g.cost) : '-'}</p></div>
+                                </div>
+                            </div>
+                            {g.nextAction && (
+                                <p className="mt-3 text-xs text-amber-700">
+                                    가장 이른 기한 · {g.nextAction.title} ({g.nextAction.label}) {g.nextAction.date}
+                                    <span className="ml-2 font-bold">{g.nextAction.dDay >= 0 ? `D-${g.nextAction.dDay}` : `${Math.abs(g.nextAction.dDay)}일 경과`}</span>
+                                </p>
+                            )}
+                            <div className="mt-3 pt-3 border-t flex flex-wrap gap-2">
+                                {g.items.map(i => (
+                                    <span key={i.recordId} className="px-2.5 py-1 rounded border text-xs text-gray-600">
+                                        <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle ${i.kind === 'cert' ? 'bg-blue-500' : 'bg-purple-500'}`}></span>
+                                        {i.title} <span className="text-gray-400 ml-1">{i.actionDate || '기한 미설정'}</span>
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+
+        // --- 감사 로그 ---
+        function AuditLogPage({ auditLogs }) {
+            const [search, setSearch] = useState('');
+            const [action, setAction] = useState('all');
+
+            const filtered = useMemo(() => {
+                const q = search.trim().toLowerCase();
+                return [...auditLogs]
+                    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+                    .filter(log => {
+                        if (action !== 'all' && log.action !== action) return false;
+                        if (!q) return true;
+                        return [log.message, log.action, JSON.stringify(log.before || ''), JSON.stringify(log.after || '')]
+                            .join(' ').toLowerCase().includes(q);
+                    });
+            }, [auditLogs, search, action]);
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <div>
+                            <h2 className="text-2xl font-bold text-gray-800">감사 로그</h2>
+                            <p className="text-sm text-gray-500 mt-1">누가 언제 인증·특허 정보를 바꿨는지 기록합니다. 최근 300건까지 표시됩니다.</p>
+                        </div>
+                        <span className="text-sm text-gray-500">{filtered.length}건</span>
+                    </div>
+
+                    <div className="glass-panel p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div className="md:col-span-2 relative">
+                            <input type="text" placeholder="내용 검색..." value={search} onChange={e => setSearch(e.target.value)}
+                                className="w-full pl-8 pr-3 py-2 text-sm border rounded bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                            <span className="absolute left-2.5 top-2.5 text-gray-400"><Icons.Search /></span>
+                        </div>
+                        <select value={action} onChange={e => setAction(e.target.value)} className="border rounded px-3 py-2 text-sm bg-white">
+                            <option value="all">전체 작업</option>
+                            {Object.entries(AUDIT_ACTIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                        </select>
+                    </div>
+
+                    <div className="glass-panel overflow-hidden">
+                        {filtered.length === 0 ? (
+                            <p className="p-10 text-center text-gray-400 text-sm">
+                                {auditLogs.length === 0 ? '아직 기록이 없습니다.' : '조건에 맞는 기록이 없습니다.'}
+                            </p>
+                        ) : (
+                            <div className="divide-y max-h-[640px] overflow-y-auto custom-scroll">
+                                {filtered.slice(0, 300).map(log => {
+                                    const act = AUDIT_ACTIONS[log.action] || { label: log.action || '-', cls: 'bg-gray-100 text-gray-600' };
+                                    const changes = diffAuditSnapshots(log.before, log.after, log.target);
+                                    return (
+                                        <div key={log.id} className="px-5 py-4 hover:bg-gray-50">
+                                            <div className="flex flex-wrap items-center gap-2 text-sm">
+                                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${act.cls}`}>{act.label}</span>
+                                                {log.target && (
+                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${log.target === 'cert' ? 'bg-blue-50 text-blue-600' : 'bg-purple-50 text-purple-600'}`}>
+                                                        {log.target === 'cert' ? '인증' : '권리'}
+                                                    </span>
+                                                )}
+                                                <span className="text-gray-800">{log.message || '-'}</span>
+                                                <span className="ml-auto text-xs text-gray-400 font-mono">
+                                                    {log.createdAt ? new Date(log.createdAt).toLocaleString('ko-KR') : '-'}
+                                                </span>
+                                            </div>
+                                            {changes.length > 0 && (
+                                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                                    {changes.map(c => (
+                                                        <span key={c.key} className="text-[11px] bg-gray-50 border rounded px-2 py-1 text-gray-600">
+                                                            <span className="text-gray-400">{c.label}</span>{' '}
+                                                            <span className="line-through text-gray-400">{c.from}</span>
+                                                            <span className="mx-1 text-gray-300">→</span>
+                                                            <span className="font-medium text-gray-800">{c.to}</span>
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 환경설정 ---
+        function SettingsPage({ isDemoMode, alertStages, onSaveStages, onImportCsv }) {
+            const [stages, setStages] = useState(alertStages);
+            const [newStage, setNewStage] = useState('');
+            const [savingStages, setSavingStages] = useState(false);
+            const [file, setFile] = useState(null);
+            const [preview, setPreview] = useState(null);
+            const [importing, setImporting] = useState(false);
+            const [fileKey, setFileKey] = useState(0);
+
+            useEffect(() => { setStages(alertStages); }, [alertStages]);
+
+            const addStage = () => {
+                const v = parseInt(newStage, 10);
+                if (Number.isNaN(v) || v <= 0) { alert('1 이상의 숫자를 입력하세요.'); return; }
+                if (stages.includes(v)) { alert('이미 있는 단계입니다.'); return; }
+                setStages([...stages, v].sort((a, b) => b - a));
+                setNewStage('');
+            };
+
+            const dirty = stages.join(',') !== alertStages.join(',');
+
+            const handleFile = (e) => {
+                const f = e.target.files[0];
+                setFile(f || null);
+                setPreview(null);
+                if (!f) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                    try {
+                        const rows = parseCSV(reader.result);
+                        if (rows.length < 2) throw new Error('데이터 행이 없습니다.');
+                        const headers = rows[0].map(h => String(h).trim());
+                        const certIdx = headers.indexOf('인증명');
+                        const patentIdx = headers.indexOf('발명의명칭');
+                        if (certIdx < 0 && patentIdx < 0) {
+                            throw new Error("CSV 헤더에 '인증명' 또는 '발명의명칭' 컬럼이 필요합니다.");
+                        }
+                        const kind = certIdx >= 0 ? 'cert' : 'patent';
+                        const nameIdx = certIdx >= 0 ? certIdx : patentIdx;
+                        const samples = rows.slice(1).map(r => String(r[nameIdx] || '').trim()).filter(Boolean);
+                        setPreview({ rows, kind, count: samples.length, samples: samples.slice(0, 8) });
+                    } catch (err) {
+                        setPreview({ error: err.message });
+                    }
+                };
+                reader.readAsText(f, 'utf-8');
+            };
+
+            const runImport = async () => {
+                if (!preview || preview.error || !preview.count) return;
+                const kindLabel = preview.kind === 'cert' ? '인증서' : '산업재산권';
+                if (!confirm(`${kindLabel} ${preview.count}건을 추가합니다. 기존 데이터는 지워지지 않고 함께 남습니다.\n계속하시겠습니까?`)) return;
+                setImporting(true);
+                const added = await onImportCsv(preview.rows, preview.kind);
+                setImporting(false);
+                setFile(null); setPreview(null); setFileKey(k => k + 1);
+                alert(`${added}건을 복원했습니다.`);
+            };
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <h2 className="text-2xl font-bold text-gray-800">환경설정</h2>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="glass-panel p-6 h-fit">
+                            <h3 className="text-lg font-semibold mb-1 flex items-center gap-2"><Icons.Bell /> 공통 알림 단계</h3>
+                            <p className="text-xs text-gray-500 mb-4">
+                                만료일·연차료 기한이 이 일수 이내로 다가오면 알림 센터에 뜹니다.
+                                항목마다 따로 지정하면 그 값이 우선합니다.
+                            </p>
+
+                            <div className="flex flex-wrap gap-2 mb-3 min-h-[36px]">
+                                {stages.length === 0 && <span className="text-xs text-gray-400 py-2">단계가 없습니다. 최소 한 개는 있어야 알림이 동작합니다.</span>}
+                                {stages.map(s => (
+                                    <span key={s} className="flex items-center gap-1.5 pl-3 pr-1.5 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-xs font-bold text-amber-800">
+                                        D-{s}
+                                        <button type="button" onClick={() => setStages(stages.filter(x => x !== s))}
+                                            className="text-amber-500 hover:text-amber-800 leading-none px-1" title={`D-${s} 단계 삭제`}>×</button>
+                                    </span>
+                                ))}
+                            </div>
+
+                            <div className="flex gap-2">
+                                <input type="number" min="1" placeholder="예: 45" className="flex-1 border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                    value={newStage} onChange={e => setNewStage(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addStage(); } }} />
+                                <button type="button" onClick={addStage} className="border px-4 rounded text-sm font-bold text-slate-600 hover:bg-gray-50">단계 추가</button>
+                            </div>
+
+                            <div className="flex items-center gap-2 mt-3">
+                                <button type="button" disabled={savingStages || !dirty}
+                                    onClick={async () => {
+                                        setSavingStages(true);
+                                        const ok = await onSaveStages(stages);
+                                        setSavingStages(false);
+                                        alert(ok ? '저장했습니다.' : '단계를 최소 한 개 이상 지정하세요.');
+                                    }}
+                                    className="bg-slate-800 text-white px-4 py-2 rounded text-sm font-bold hover:bg-slate-700 disabled:opacity-40">
+                                    {savingStages ? '저장중' : '저장'}
+                                </button>
+                                {dirty && <button type="button" onClick={() => setStages(alertStages)} className="text-xs text-gray-400">되돌리기</button>}
+                                <span className="ml-auto text-[11px] text-gray-400">기본값 {DEFAULT_ALERT_STAGES.join(' / ')}일</span>
+                            </div>
+                        </div>
+
+                        <div className="glass-panel p-6 h-fit">
+                            <h3 className="text-lg font-semibold mb-1 flex items-center gap-2"><Icons.Download /> CSV 복원</h3>
+                            <p className="text-xs text-gray-500 mb-4">
+                                인증서 관리 또는 특허 관리에서 내려받은 CSV 를 다시 불러옵니다.
+                                헤더를 보고 어느 대장인지 자동으로 판단하며, 기존 데이터는 지워지지 않고 뒤에 추가됩니다.
+                            </p>
+                            <input key={fileKey} type="file" accept=".csv,text/csv" onChange={handleFile}
+                                className="w-full text-xs border rounded p-2 bg-white" />
+                            {preview && preview.error && <p className="text-xs text-red-500 mt-2">{preview.error}</p>}
+                            {preview && !preview.error && (
+                                <div className="mt-3 border rounded p-3 bg-slate-50 text-xs text-slate-600">
+                                    <p className="font-bold text-slate-700">{preview.kind === 'cert' ? '인증서' : '산업재산권'} {preview.count}건 확인</p>
+                                    <p className="mt-1 text-[11px] text-slate-500">{preview.samples.join(', ')}{preview.count > preview.samples.length ? ' 외' : ''}</p>
+                                </div>
+                            )}
+                            <button type="button" disabled={!preview || preview.error || importing}
+                                onClick={runImport}
+                                className="w-full mt-3 bg-emerald-600 text-white py-2 rounded font-bold text-sm hover:bg-emerald-700 disabled:opacity-40">
+                                {importing ? '복원 중...' : 'CSV 복원 실행'}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="glass-panel p-6 max-w-xl">
+                        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><Icons.Settings /> 클라우드 연결</h3>
+                        <div className="border rounded p-3 bg-slate-50 text-xs text-slate-600 space-y-1">
+                            <p className="flex justify-between"><span className="text-slate-400">프로젝트</span><span className="font-mono">{window.userFirebaseConfig?.projectId || '-'}</span></p>
+                            <p className="flex justify-between"><span className="text-slate-400">로그인 계정</span><span className="font-mono">{window.officeflowSessionInfo.email || '-'}</span></p>
+                            <p className="flex justify-between gap-2"><span className="text-slate-400 shrink-0">데이터 공간</span><span className="font-mono truncate">{window.certAppId}</span></p>
+                            <p className="pt-1 text-[11px] text-slate-400">
+                                {isDemoMode ? '데모 모드: 이 브라우저에서만 임시 저장됩니다.' : 'OfficeFlow One 로그인 계정별로 데이터가 분리 저장됩니다.'}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 메인 ---
+        function App() {
+            const { services, user, errorMsg } = useFirebase();
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [certs, setCerts] = useState([]);
+            const [patents, setPatents] = useState([]);
+            const [auditLogs, setAuditLogs] = useState([]);
+            const [settingsDocs, setSettingsDocs] = useState([]);
+            const [renewTarget, setRenewTarget] = useState(null);
+            const [payTarget, setPayTarget] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [isDemoMode, setIsDemoMode] = useState(false);
+
+            useEffect(() => {
+                if (isDemoMode) { setLoading(false); return; }
+                if (!services || !user) return;
+                const { certCollection, onSnapshot } = window.firebaseModules;
+                const unsubCerts = onSnapshot(certCollection(services.db, 'certifications'),
+                    (snap) => { setCerts(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
+                    (err) => { if (err.code === 'permission-denied') setIsDemoMode(true); setLoading(false); }
+                );
+                const unsubPatents = onSnapshot(certCollection(services.db, 'patents'),
+                    (snap) => setPatents(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+                    () => {}
+                );
+                const unsubLogs = onSnapshot(certCollection(services.db, 'auditLogs'),
+                    (snap) => setAuditLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+                    () => {}
+                );
+                const unsubSettings = onSnapshot(certCollection(services.db, 'settings'),
+                    (snap) => setSettingsDocs(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+                    () => {}
+                );
+                return () => { unsubCerts(); unsubPatents(); unsubLogs(); unsubSettings(); };
+            }, [services, user, isDemoMode]);
+
+            // settings/general 에 저장된 공통 알림 단계. 없으면 기본값.
+            const alertStages = useMemo(() => {
+                const general = settingsDocs.find(d => d.id === 'general');
+                const saved = Array.isArray(general && general.alertStages)
+                    ? general.alertStages.map(n => parseInt(n, 10)).filter(n => !Number.isNaN(n) && n > 0)
+                    : [];
+                return (saved.length ? [...new Set(saved)] : DEFAULT_ALERT_STAGES).sort((a, b) => b - a);
+            }, [settingsDocs]);
+
+            const records = useMemo(() => buildRecords(certs, patents), [certs, patents]);
+
+            const handleSaveStages = async (next) => {
+                const clean = [...new Set(next.map(n => parseInt(n, 10)).filter(n => !Number.isNaN(n) && n > 0))].sort((a, b) => b - a);
+                if (clean.length === 0) return false;
+                if (isDemoMode) {
+                    setSettingsDocs(prev => [...prev.filter(d => d.id !== 'general'), { id: 'general', alertStages: clean }]);
+                    return true;
+                }
+                try {
+                    const { setDoc, certDoc } = window.firebaseModules;
+                    await setDoc(certDoc(services.db, 'settings', 'general'), { alertStages: clean, updatedAt: new Date().toISOString() });
+                    return true;
+                } catch (e) { console.warn('alert stage save failed', e); return false; }
+            };
+
+            const addAuditLog = async (action, target, message, before, after) => {
+                const log = { action, target, message, before: before || null, after: after || null, createdAt: new Date().toISOString() };
+                if (isDemoMode) {
+                    setAuditLogs(prev => [{ id: 'local_log_' + Date.now(), ...log }, ...prev].slice(0, 300));
+                    return;
+                }
+                try {
+                    const { addDoc, certCollection } = window.firebaseModules;
+                    await addDoc(certCollection(services.db, 'auditLogs'), log);
+                } catch (e) { console.warn('audit log write failed', e); }
+            };
+
+            // 인증서와 특허가 같은 흐름을 쓰므로 컬렉션만 갈아끼운다.
+            const collectionOf = (target) => (target === 'cert' ? 'certifications' : 'patents');
+            const setterOf = (target) => (target === 'cert' ? setCerts : setPatents);
+            const listOf = (target) => (target === 'cert' ? certs : patents);
+
+            const handleAdd = (target) => async (data) => {
+                const payload = { ...data, history: [], alertAcks: [], createdAt: new Date().toISOString() };
+                if (isDemoMode) {
+                    setterOf(target)(prev => [...prev, { ...payload, id: 'local_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7) }]);
+                } else {
+                    try {
+                        const { addDoc, certCollection } = window.firebaseModules;
+                        await addDoc(certCollection(services.db, collectionOf(target)), payload);
+                    } catch (e) {
+                        console.error('add failed', e);
+                        alert('저장에 실패했습니다. Firestore 규칙을 확인하세요.');
+                        return;
+                    }
+                }
+                await addAuditLog('add', target, `${data.name} 등록`, null, snapshotForAudit(payload, target));
+            };
+
+            const handleUpdate = (target) => async (id, data) => {
+                const before = snapshotForAudit(listOf(target).find(x => x.id === id), target);
+                if (isDemoMode) {
+                    setterOf(target)(prev => prev.map(x => x.id === id ? { ...x, ...data } : x));
+                } else {
+                    try {
+                        const { updateDoc, certDoc } = window.firebaseModules;
+                        await updateDoc(certDoc(services.db, collectionOf(target), id), { ...data, updatedAt: new Date().toISOString() });
+                    } catch (e) {
+                        console.error('update failed', e);
+                        alert('수정에 실패했습니다.');
+                        return;
+                    }
+                }
+                await addAuditLog('update', target, `${data.name} 수정`, before, snapshotForAudit(data, target));
+            };
+
+            const handleDelete = (target) => async (id) => {
+                const item = listOf(target).find(x => x.id === id);
+                if (!confirm(`'${item?.name || id}' 항목을 삭제합니다. 계속하시겠습니까?`)) return;
+                if (isDemoMode) {
+                    setterOf(target)(prev => prev.filter(x => x.id !== id));
+                } else {
+                    try {
+                        const { deleteDoc, certDoc } = window.firebaseModules;
+                        await deleteDoc(certDoc(services.db, collectionOf(target), id));
+                    } catch (e) {
+                        console.error('delete failed', e);
+                        alert('삭제에 실패했습니다.');
+                        return;
+                    }
+                }
+                await addAuditLog('del', target, `${item?.name || id} 삭제`, snapshotForAudit(item, target), null);
+            };
+
+            const writeDoc = async (target, id, patch) => {
+                if (isDemoMode) {
+                    setterOf(target)(prev => prev.map(x => x.id === id ? { ...x, ...patch } : x));
+                    return true;
+                }
+                try {
+                    const { updateDoc, certDoc } = window.firebaseModules;
+                    await updateDoc(certDoc(services.db, collectionOf(target), id), patch);
+                    return true;
+                } catch (e) {
+                    console.error('write failed', e);
+                    return false;
+                }
+            };
+
+            // 인증 갱신: 현재 주기를 이력으로 밀어 넣고 새 주기로 교체한다.
+            // 기한이 바뀌므로 알림 확인 기록도 비워 새 주기의 알림이 다시 뜨게 한다.
+            const handleRenewCert = async (form) => {
+                const cert = renewTarget;
+                if (!cert) return;
+                if (form.acquiredDate && form.expiryDate && form.acquiredDate > form.expiryDate) {
+                    alert('취득일이 만료일보다 늦습니다.');
+                    return;
+                }
+                const archived = {
+                    id: 'term_' + Date.now(),
+                    acquiredDate: cert.acquiredDate || '', expiryDate: cert.expiryDate || '',
+                    certNo: cert.certNo || '', recordedAt: new Date().toISOString(),
+                };
+                const next = {
+                    acquiredDate: form.acquiredDate, expiryDate: form.expiryDate, certNo: form.certNo,
+                    history: [...(Array.isArray(cert.history) ? cert.history : []), archived],
+                    alertAcks: [],
+                    updatedAt: new Date().toISOString(),
+                };
+                const ok = await writeDoc('cert', cert.id, next);
+                if (!ok) { alert('갱신 처리에 실패했습니다.'); return; }
+                await addAuditLog('renew', 'cert', `${cert.name} 갱신 처리 (만료 ${cert.expiryDate || '-'} → ${form.expiryDate})`,
+                    snapshotForAudit(cert, 'cert'), snapshotForAudit({ ...cert, ...next }, 'cert'));
+                setRenewTarget(null);
+            };
+
+            // 연차료 납부: 납부 완료 연차를 올리고 이력에 남긴다.
+            const handlePayAnnuity = async (form) => {
+                const patent = payTarget;
+                if (!patent) return;
+                const info = nextAnnuity(patent);
+                if (!info) { setPayTarget(null); return; }
+                const years = Math.max(1, parseInt(form.years) || 1);
+                const paid = Math.max(0, parseInt(patent.paidThroughYear) || 0);
+                const entry = {
+                    id: 'pay_' + Date.now(),
+                    year: years > 1 ? `${info.year}~${info.year + years - 1}` : String(info.year),
+                    due: info.due, paidAt: form.paidAt, fee: num(form.fee),
+                    recordedAt: new Date().toISOString(),
+                };
+                const next = {
+                    paidThroughYear: paid + years,
+                    annuityFee: num(form.fee) || num(patent.annuityFee),
+                    history: [...(Array.isArray(patent.history) ? patent.history : []), entry],
+                    alertAcks: [],
+                    updatedAt: new Date().toISOString(),
+                };
+                const ok = await writeDoc('patent', patent.id, next);
+                if (!ok) { alert('납부 처리에 실패했습니다.'); return; }
+                await addAuditLog('pay', 'patent',
+                    `${patent.name} ${entry.year}년차 연차료 납부 (${formatKrw(entry.fee)})`,
+                    snapshotForAudit(patent, 'patent'), snapshotForAudit({ ...patent, ...next }, 'patent'));
+                setPayTarget(null);
+            };
+
+            const handleAck = async (record, stage) => {
+                const target = record.kind;
+                const item = listOf(target).find(x => x.id === record.id);
+                if (!item) return;
+                const key = ackKey(record.actionDate, stage);
+                const acks = Array.isArray(item.alertAcks) ? item.alertAcks : [];
+                if (acks.includes(key)) return;
+                const ok = await writeDoc(target, record.id, { alertAcks: [...acks, key] });
+                if (!ok) { alert('알림 확인 처리에 실패했습니다.'); return; }
+                await addAuditLog('ack', target, `${record.title} D-${stage} 알림 확인 (기한 ${record.actionDate})`, null, null);
+            };
+
+            const handleUnack = async (record, stage) => {
+                const target = record.kind;
+                const item = listOf(target).find(x => x.id === record.id);
+                if (!item) return;
+                const key = ackKey(record.actionDate, stage);
+                const acks = (Array.isArray(item.alertAcks) ? item.alertAcks : []).filter(k => k !== key);
+                await writeDoc(target, record.id, { alertAcks: acks });
+            };
+
+            // 각 대장에서 내려받은 CSV 를 되돌린다. 계산 컬럼(남은일수/다음기한 등)은 무시한다.
+            const handleImportCsv = async (rows, kind) => {
+                const headers = rows[0].map(h => String(h).trim());
+                const at = (label) => headers.indexOf(label);
+                const cell = (row, i) => (i >= 0 ? String(row[i] || '').trim() : '');
+                let imported = 0;
+
+                if (kind === 'cert') {
+                    const idx = {
+                        name: at('인증명'), category: at('구분'), issuer: at('인증기관'), certNo: at('인증번호'),
+                        acquiredDate: at('취득일'), expiryDate: at('만료일'), alertDays: at('개별알림단계'),
+                        manager: at('담당자'), docLink: at('문서링크'), memo: at('비고'),
+                    };
+                    for (const row of rows.slice(1)) {
+                        const name = cell(row, idx.name);
+                        if (!name) continue;
+                        const category = cell(row, idx.category);
+                        await handleAdd('cert')({
+                            ...EMPTY_CERT_FORM,
+                            name,
+                            category: CERT_CATEGORIES.includes(category) ? category : '기타',
+                            issuer: cell(row, idx.issuer),
+                            certNo: cell(row, idx.certNo),
+                            acquiredDate: cell(row, idx.acquiredDate),
+                            expiryDate: cell(row, idx.expiryDate),
+                            alertDays: cell(row, idx.alertDays),
+                            manager: cell(row, idx.manager),
+                            docLink: cell(row, idx.docLink),
+                            memo: cell(row, idx.memo),
+                        });
+                        imported++;
+                    }
+                    return imported;
+                }
+
+                const idx = {
+                    name: at('발명의명칭'), rightType: at('권리구분'),
+                    applicationNo: at('출원번호'), applicationDate: at('출원일'),
+                    registrationNo: at('등록번호'), registrationDate: at('등록일'),
+                    paidThroughYear: at('납부완료연차'), annuityFee: at('연차료'),
+                    agent: at('대리인'), alertDays: at('개별알림단계'),
+                    manager: at('담당자'), docLink: at('문서링크'), memo: at('비고'),
+                };
+                for (const row of rows.slice(1)) {
+                    const name = cell(row, idx.name);
+                    if (!name) continue;
+                    const typeLabel = cell(row, idx.rightType);
+                    const matched = IP_TYPES.find(t => t.label === typeLabel);
+                    const paidRaw = parseInt(cell(row, idx.paidThroughYear).replace(/,/g, ''), 10);
+                    await handleAdd('patent')({
+                        ...EMPTY_PATENT_FORM,
+                        name,
+                        rightType: matched ? matched.value : 'patent',
+                        applicationNo: cell(row, idx.applicationNo),
+                        applicationDate: cell(row, idx.applicationDate),
+                        registrationNo: cell(row, idx.registrationNo),
+                        registrationDate: cell(row, idx.registrationDate),
+                        paidThroughYear: Number.isNaN(paidRaw) ? EMPTY_PATENT_FORM.paidThroughYear : paidRaw,
+                        annuityFee: num(cell(row, idx.annuityFee)),
+                        agent: cell(row, idx.agent),
+                        alertDays: cell(row, idx.alertDays),
+                        manager: cell(row, idx.manager),
+                        docLink: cell(row, idx.docLink),
+                        memo: cell(row, idx.memo),
+                    });
+                    imported++;
+                }
+                return imported;
+            };
+
+            const handleDownloadOpsReport = () => {
+                const today = new Date().toISOString().slice(0, 10);
+                const withDDay = records
+                    .map(r => ({ r, dDay: diffDaysFromToday(r.actionDate) }))
+                    .filter(x => x.dDay !== null);
+                const soon = withDDay.filter(x => x.dDay >= 0 && x.dDay <= 180).sort((a, b) => a.dDay - b.dDay);
+                const past = withDDay.filter(x => x.dDay < 0).sort((a, b) => a.dDay - b.dDay);
+                const annuity12m = withDDay
+                    .filter(x => x.r.kind === 'patent' && x.dDay >= 0 && x.dDay <= 365)
+                    .reduce((a, x) => a + num(x.r.cost), 0);
+
+                downloadCSV([
+                    ['리포트일자', today],
+                    ['보유 인증서', `${certs.length}`],
+                    ['보유 산업재산권', `${patents.length}`],
+                    ['알림 단계', alertStages.join(' / ') + '일'],
+                    ['향후 1년 예상 연차료(원)', `${annuity12m}`],
+                    [],
+                    ['기한 경과', '구분', '기한', '기한종류', '경과일', '담당자'],
+                    ...past.map(x => [x.r.title, x.r.badge, x.r.actionDate || '-', x.r.actionLabel, `${Math.abs(x.dDay)}일`, x.r.manager || '-']),
+                    [],
+                    ['대응 필요 (D-180)', '구분', '기한', '기한종류', '남은일수', '담당자'],
+                    ...soon.map(x => [x.r.title, x.r.badge, x.r.actionDate || '-', x.r.actionLabel, `D-${x.dDay}`, x.r.manager || '-']),
+                ], `certification_report_${today}.csv`);
+            };
+
+            if ((!services || !user) && !isDemoMode) {
+                if (errorMsg) return (
+                    <div className="h-screen flex items-center justify-center p-4">
+                        <div className="bg-white p-8 rounded shadow text-center">
+                            <p className="text-red-500 mb-4">{errorMsg}</p>
+                            <button onClick={() => setIsDemoMode(true)} className="bg-blue-600 text-white px-4 py-2 rounded font-bold">데모 모드로 시작</button>
+                            <button onClick={() => window.location.reload()} className="ml-2 bg-gray-200 px-4 py-2 rounded">다시 연결</button>
+                        </div>
+                    </div>
+                );
+                return <div className="h-screen flex items-center justify-center"><div className="spinner"></div></div>;
+            }
+
+            return (
+                <div className="flex h-screen overflow-hidden bg-[#f3f4f6] flex-col">
+                    {isDemoMode && <SetupBanner />}
+                    {renewTarget && <RenewCertModal cert={renewTarget} onClose={() => setRenewTarget(null)} onSubmit={handleRenewCert} />}
+                    {payTarget && <PayAnnuityModal patent={payTarget} onClose={() => setPayTarget(null)} onSubmit={handlePayAnnuity} />}
+                    <div className="flex flex-1 overflow-hidden">
+                        <aside className="w-64 bg-slate-900 text-white hidden md:flex flex-col shadow-2xl z-20">
+                            <div className="p-6 border-b border-slate-800 font-bold text-blue-400 text-xl tracking-tight">인증·특허</div>
+                            <nav className="flex-1 p-4 space-y-5 overflow-y-auto custom-scroll">
+                                {NAV_GROUPS.map(group => (
+                                    <div key={group.title} className={group.title === '관리' ? 'pt-4 border-t border-slate-800' : ''}>
+                                        <p className="px-3 mb-2 text-[11px] font-bold tracking-wider text-slate-400 uppercase">{group.title}</p>
+                                        <div className="space-y-2">
+                                            {group.items.map(item => (
+                                                <NavButton key={item.id} active={activeTab === item.id}
+                                                    onClick={() => setActiveTab(item.id)} icon={<item.Icon />} label={item.label} />
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </nav>
+                        </aside>
+
+                        <main className="flex-1 overflow-y-auto p-4 pb-24 md:p-8 md:pb-8 relative custom-scroll">
+                            {loading ? <div className="flex justify-center mt-20"><div className="spinner"></div></div> : (
+                                <div className="max-w-7xl mx-auto">
+                                    {activeTab === 'dashboard' && <DashboardPage records={records} patents={patents} alertStages={alertStages} onDownloadReport={handleDownloadOpsReport} onGoAlerts={() => setActiveTab('alerts')} />}
+                                    {activeTab === 'alerts' && <AlertCenterPage records={records} alertStages={alertStages} onAck={handleAck} onUnack={handleUnack} />}
+                                    {activeTab === 'schedule' && <SchedulePage records={records} />}
+                                    {activeTab === 'certs' && <CertManagement certs={certs} onAdd={handleAdd('cert')} onUpdate={handleUpdate('cert')} onDelete={handleDelete('cert')} onRenew={setRenewTarget} alertStages={alertStages} />}
+                                    {activeTab === 'patents' && <PatentManagement patents={patents} onAdd={handleAdd('patent')} onUpdate={handleUpdate('patent')} onDelete={handleDelete('patent')} onPay={setPayTarget} alertStages={alertStages} />}
+                                    {activeTab === 'issuers' && <IssuerPage records={records} />}
+                                    {activeTab === 'audit' && <AuditLogPage auditLogs={auditLogs} />}
+                                    {activeTab === 'settings' && <SettingsPage isDemoMode={isDemoMode} alertStages={alertStages} onSaveStages={handleSaveStages} onImportCsv={handleImportCsv} />}
+                                </div>
+                            )}
+                        </main>
+                    </div>
+
+                    {/* 모바일에서는 사이드바 대신 하단 내비를 쓴다 (다른 앱들과 동일한 패턴) */}
+                    <nav className="md:hidden fixed bottom-0 inset-x-0 z-50 flex justify-around bg-white/95 backdrop-blur border-t border-slate-200 px-1 py-2 shadow-[0_-4px_20px_rgba(0,0,0,0.06)]">
+                        {NAV_ITEMS.map(item => (
+                            <button key={item.id} onClick={() => setActiveTab(item.id)}
+                                className={`flex flex-col items-center gap-1 px-2 py-1 rounded transition-colors ${activeTab === item.id ? 'text-blue-600' : 'text-slate-400'}`}>
+                                <item.Icon />
+                                <span className="text-[10px] font-medium leading-none">{item.short}</span>
+                            </button>
+                        ))}
+                    </nav>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

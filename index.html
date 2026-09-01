@@ -2938,6 +2938,15 @@
             icon: createIcon("lease"),
           },
           {
+            id: "certs",
+            title: "인증·특허 관리",
+            summary: "기업 인증서와 특허·상표의 만료일, 연차료 납부기한을 단계별 알림으로 관리하는 지식재산 운영 앱",
+            why: "인증마다 갱신주기가 제각각이고 특허 연차료는 한 번 놓치면 권리가 소멸해 기한 관리 수요가 명확합니다.",
+            premium: false,
+            statLabel: "인증·특허",
+            icon: createIcon("certs"),
+          },
+          {
             id: "assets",
             title: "보험·차량 관리",
             summary: "보험, 차량, 사고, 서류, 협력사 정보를 통합 관리하는 자산 운영 앱",
@@ -3600,6 +3609,7 @@
             state.navigation.current === "vehiclelog" ||
             state.navigation.current === "license" ||
             state.navigation.current === "lease" ||
+            state.navigation.current === "certs" ||
             state.navigation.current === "fixedassets";
           const isBoardView = state.navigation.current === "board";
           const isDashboardView = state.navigation.current === "dashboard";
@@ -3630,6 +3640,7 @@
           if (state.navigation.current === "fixedassets") renderFixedAssetsApp();
           if (state.navigation.current === "license") renderSoftwareLicenseApp();
           if (state.navigation.current === "lease") renderLeaseApp();
+          if (state.navigation.current === "certs") renderCertificationApp();
           if (state.navigation.current === "assets") renderCorpAssetsApp();
           if (state.navigation.current === "ceremony") renderCeremonyApp();
           if (state.navigation.current === "admin") {
@@ -5790,6 +5801,21 @@
           frame.className = "ceremony-embed-frame";
           frame.src = "lease-original.html";
           frame.title = "임대차계약 관리 원본 앱";
+          frame.loading = "eager";
+          frame.referrerPolicy = "strict-origin-when-cross-origin";
+
+          shell.append(frame);
+          elements.viewContainer.appendChild(shell);
+        }
+
+        function renderCertificationApp() {
+          const shell = document.createElement("div");
+          shell.className = "ceremony-embed-shell";
+
+          const frame = document.createElement("iframe");
+          frame.className = "ceremony-embed-frame";
+          frame.src = "certification-original.html";
+          frame.title = "인증·특허 관리 원본 앱";
           frame.loading = "eager";
           frame.referrerPolicy = "strict-origin-when-cross-origin";
 
@@ -8770,6 +8796,27 @@
               <path d="M8.4 9.4h1.3M11 9.4h1.3M8.4 12h1.3M11 12h1.3M8.4 14.6h1.3M11 14.6h1.3" stroke="#B85D12" stroke-width="1.3" stroke-linecap="round"/>
               <path d="M15.2 12.6h1.2M15.2 15h1.2" stroke="#C2610F" stroke-width="1.2" stroke-linecap="round"/>
               <path d="M5.2 18.7h13.6" stroke="#FFE7CE" stroke-width="1.5" stroke-linecap="round"/>
+            `);
+          }
+          if (type === "certs") {
+            return createRichSvgIcon(`
+              <defs>
+                <linearGradient id="certsBg" x1="4" y1="3" x2="20" y2="21" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#E8508A"/>
+                  <stop offset="1" stop-color="#B02463"/>
+                </linearGradient>
+                <linearGradient id="certsSheet" x1="6.5" y1="5" x2="16.5" y2="17" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#FFFFFF"/>
+                  <stop offset="1" stop-color="#FFEAF3"/>
+                </linearGradient>
+              </defs>
+              <rect x="2.5" y="2.5" width="19" height="19" rx="6.2" fill="url(#certsBg)"/>
+              <circle cx="17.4" cy="6.6" r="2.3" fill="#FFC2DC" opacity=".38"/>
+              <rect x="5.4" y="4.4" width="10.2" height="12.4" rx="1.9" fill="url(#certsSheet)"/>
+              <path d="M7.8 7.8h5.4M7.8 10.3h5.4M7.8 12.8h3.4" stroke="#B02463" stroke-width="1.5" stroke-linecap="round"/>
+              <path d="M14.7 15.6v4.7l1.7-1.1 1.7 1.1v-4.7Z" fill="#F4A8C8"/>
+              <circle cx="16.4" cy="14.2" r="3.4" fill="#D93B7B" stroke="#FFE3EE" stroke-width="1.3"/>
+              <path d="m14.9 14.2 1.1 1.1 2-2.2" stroke="#FFFFFF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
             `);
           }
           if (type === "assets") {

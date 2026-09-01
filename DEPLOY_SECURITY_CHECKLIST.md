@@ -17,6 +17,7 @@ Use the current app structure with owner-based restrictions where available:
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
     function signedIn() {
       return request.auth != null;
     }
@@ -68,6 +69,7 @@ service cloud.firestore {
 
     match /artifacts/{appId}/public/data/{document=**} {
       allow read, write: if
+        ownsApp(appId, 'ofw-certification') ||
         ownsApp(appId, 'ofw-corp-assets') ||
         ownsApp(appId, 'ofw-fixed-assets') ||
         ownsApp(appId, 'ofw-lease') ||
