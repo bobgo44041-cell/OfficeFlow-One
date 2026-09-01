@@ -100,10 +100,14 @@ service cloud.firestore {
 }
 ```
 
-### Firebase Storage Rules required before public deploy
+### Firebase Storage Rules
 
-파일 업로드 기능을 사용하지 않는다. 앱에서 업로드 UI 를 제거했고,
-규칙에서도 모든 접근을 막는다.
+이 프로젝트는 Firebase Storage 를 사용하지 않는다.
+
+- Storage 가 활성화돼 있지 않다(Blaze 요금제 필요). 콘솔에 규칙 화면 자체가
+  없으므로 지금 게시할 것은 없다.
+- 앱에서도 파일 업로드 UI 를 모두 제거했다.
+- 나중에 Storage 를 켜게 되면 아래 규칙을 그대로 게시해 전 경로를 막아둔다.
 
 ```txt
 rules_version = '2';
@@ -122,7 +126,7 @@ service firebase.storage {
 
 ### Must-do before public launch
 - Publish the rules above in Firebase Console
-- Publish the storage rules above in Firebase Console
+- Storage 는 활성화돼 있지 않아 게시할 규칙이 없다. 켜게 되면 위 규칙을 게시할 것
 - Verify existing ceremony records include `ownerUid`; old documents without it will not appear after the rule tighten
 - Verify Google sign-in is the only enabled public auth provider
 - Disable Email/Password auth provider in Firebase Authentication if it is still enabled

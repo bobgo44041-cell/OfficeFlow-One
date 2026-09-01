@@ -1,8 +1,10 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    // 파일 업로드 기능을 사용하지 않는다.
-    // 앱에서 업로드 UI 를 제거했고, 규칙에서도 모든 접근을 막는다.
+    // 이 프로젝트는 Firebase Storage 를 사용하지 않는다.
+    // Storage 자체가 활성화돼 있지 않아(Blaze 요금제 필요) 게시할 대상도 없고,
+    // 앱에서도 파일 업로드 UI 를 모두 제거했다.
+    // 나중에 Storage 를 켜게 되면 이 파일을 그대로 게시해 전 경로를 막아둔다.
     match /{allPaths=**} {
       allow read, write: if false;
     }

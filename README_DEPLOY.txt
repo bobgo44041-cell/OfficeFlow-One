@@ -28,6 +28,6 @@ OfficeFlow One 배포 폴더
 배포 전 확인:
 1. Firebase Authorized Domains에 실제 배포 도메인 추가
 2. Firestore Rules에 firestore.rules 내용 반영
-3. Firebase Storage Rules에 storage.rules 내용 반영
+3. Firebase Storage는 사용하지 않음 (활성화 안 됨, 게시할 규칙 없음)
 4. Firebase Authentication에서 Google 로그인만 활성화
 5. index.html과 iframe 앱 파일들이 같은 경로에 함께 배포되는지 확인
