@@ -407,6 +407,186 @@
             return { services, user, errorMsg };
         }
 
+        // --- 차트 ---
+        // 긴급도 색은 dataviz 검증기 통과 (경과/임박/여유, CVD ΔE 18 이상).
+        // amber 는 배경 대비가 낮아 막대마다 D-day 라벨을 함께 표시한다.
+        const URGENCY = {
+            overdue: { color: '#dc2626', label: '기한 경과' },
+            soon:    { color: '#f59e0b', label: 'D-90 이내' },
+            later:   { color: '#3b82f6', label: '여유' },
+        };
+
+        const urgencyOf = (dDay) => (dDay === null ? null : dDay < 0 ? 'overdue' : dDay <= 90 ? 'soon' : 'later');
+
+        // 계약 기간을 가로 막대로 그려 언제 무엇이 끝나는지, 만료가 몰리는지 본다.
+        function LeaseTimeline({ leases }) {
+            const [hover, setHover] = useState(null);
+
+            const rows = useMemo(() => leases
+                .map(l => {
+                    const start = toDateOnly(l.startDate);
+                    const end = toDateOnly(l.endDate);
+                    if (!start || !end || end < start) return null;
+                    const actionDate = getActionDate(l);
+                    return { lease: l, start, end, notice: toDateOnly(getNoticeDeadline(l)), dDay: diffDaysFromToday(actionDate), actionDate };
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.end - b.end), [leases]);
+
+            if (rows.length === 0) {
+                return (
+                    <div className="glass-panel p-6">
+                        <h3 className="font-bold text-gray-700 mb-1">계약 만료 타임라인</h3>
+                        <p className="text-sm text-gray-400 py-8 text-center">계약 시작일과 종료일이 모두 입력된 계약이 없습니다.</p>
+                    </div>
+                );
+            }
+
+            const today = todayDateOnly();
+            const minT = Math.min(...rows.map(r => r.start.getTime()), today.getTime());
+            const maxT = Math.max(...rows.map(r => r.end.getTime()), today.getTime());
+            const span = Math.max(1, maxT - minT);
+            const pct = (t) => ((t - minT) / span) * 100;
+
+            // 눈금: 연 단위
+            const ticks = [];
+            for (let y = new Date(minT).getFullYear(); y <= new Date(maxT).getFullYear() + 1; y++) {
+                const t = new Date(y, 0, 1).getTime();
+                if (t >= minT && t <= maxT) ticks.push({ year: y, left: pct(t) });
+            }
+
+            return (
+                <div className="glass-panel p-6">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
+                        <h3 className="font-bold text-gray-700">계약 만료 타임라인</h3>
+                        <div className="flex flex-wrap gap-3 text-[11px] text-gray-500">
+                            {Object.values(URGENCY).map(u => (
+                                <span key={u.label} className="flex items-center gap-1.5">
+                                    <span className="w-3 h-2 rounded-sm" style={{ background: u.color }}></span>{u.label}
+                                </span>
+                            ))}
+                            <span className="flex items-center gap-1.5"><span className="w-[2px] h-3 bg-slate-800"></span>오늘</span>
+                            <span className="flex items-center gap-1.5"><span className="w-[2px] h-3 bg-amber-600"></span>통보 마감</span>
+                        </div>
+                    </div>
+                    <p className="text-[11px] text-gray-400 mb-4">막대 끝이 계약 종료일입니다. 색은 대응 기한까지 남은 일수를 나타냅니다.</p>
+
+                    <div className="relative">
+                        {/* 연도 눈금 */}
+                        <div className="relative h-4 ml-[132px] mb-1">
+                            {ticks.map(t => (
+                                <span key={t.year} className="absolute text-[10px] text-gray-400 -translate-x-1/2" style={{ left: t.left + '%' }}>{t.year}</span>
+                            ))}
+                        </div>
+
+                        <div className="space-y-2">
+                            {rows.map(({ lease, start, end, notice, dDay, actionDate }) => {
+                                const u = URGENCY[urgencyOf(dDay)] || URGENCY.later;
+                                const left = pct(start.getTime());
+                                const width = Math.max(1.5, pct(end.getTime()) - left);
+                                return (
+                                    <div key={lease.id} className="flex items-center gap-3">
+                                        <span className="w-[120px] shrink-0 text-xs text-gray-700 truncate text-right" title={lease.name}>{lease.name}</span>
+                                        <div className="relative flex-1 h-7">
+                                            {/* 트랙 */}
+                                            <div className="absolute inset-y-2 inset-x-0 bg-gray-100 rounded"></div>
+                                            {/* 연도 구분선 */}
+                                            {ticks.map(t => (
+                                                <span key={t.year} className="absolute inset-y-0 w-px bg-gray-200" style={{ left: t.left + '%' }}></span>
+                                            ))}
+                                            {/* 계약 기간 */}
+                                            <div
+                                                className="absolute inset-y-1.5 rounded cursor-default"
+                                                style={{ left: left + '%', width: width + '%', background: u.color }}
+                                                onMouseEnter={() => setHover(lease.id)}
+                                                onMouseLeave={() => setHover(null)}
+                                            ></div>
+                                            {/* 통보 마감 */}
+                                            {notice && (
+                                                <span className="absolute inset-y-0.5 w-[2px] bg-amber-600 rounded"
+                                                    style={{ left: pct(notice.getTime()) + '%' }} title={'통보 마감 ' + getNoticeDeadline(lease)}></span>
+                                            )}
+                                            {/* 오늘 */}
+                                            <span className="absolute inset-y-0 w-[2px] bg-slate-800 rounded" style={{ left: pct(today.getTime()) + '%' }}></span>
+                                            {/* 툴팁 */}
+                                            {hover === lease.id && (
+                                                <div className="absolute z-20 -top-1 left-1/2 -translate-x-1/2 -translate-y-full bg-slate-800 text-white text-[11px] rounded px-2.5 py-1.5 whitespace-nowrap shadow-lg pointer-events-none">
+                                                    {lease.startDate} ~ {lease.endDate}
+                                                    <span className="mx-1.5 text-slate-400">·</span>{formatKrw(monthlyOutgo(lease))}/월
+                                                    <div className="text-slate-300">대응 기한 {actionDate || '-'}</div>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <span className={`w-[76px] shrink-0 text-right text-[11px] font-bold ${dDay < 0 ? 'text-red-600' : dDay <= 90 ? 'text-amber-700' : 'text-gray-400'}`}>
+                                            {dDay === null ? '-' : dDay < 0 ? `${Math.abs(dDay)}일 경과` : `D-${dDay}`}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 계약이 끝나는 시점별로 묶인 보증금이 언제 풀리는지 본다.
+        function DepositMaturity({ leases }) {
+            const [hover, setHover] = useState(null);
+
+            const years = useMemo(() => {
+                const map = new Map();
+                leases.forEach(l => {
+                    const end = toDateOnly(l.endDate);
+                    if (!end || !num(l.deposit)) return;
+                    const y = end.getFullYear();
+                    if (!map.has(y)) map.set(y, { year: y, deposit: 0, count: 0, names: [] });
+                    const g = map.get(y);
+                    g.deposit += num(l.deposit);
+                    g.count += 1;
+                    g.names.push(l.name);
+                });
+                return [...map.values()].sort((a, b) => a.year - b.year);
+            }, [leases]);
+
+            const max = years.length ? Math.max(...years.map(y => y.deposit)) : 0;
+            const total = years.reduce((a, y) => a + y.deposit, 0);
+
+            return (
+                <div className="glass-panel p-6">
+                    <h3 className="font-bold text-gray-700 mb-1">계약 종료 연도별 보증금</h3>
+                    <p className="text-[11px] text-gray-400 mb-4">계약이 끝나면 예치한 보증금이 회수됩니다. 갱신하면 그대로 승계됩니다.</p>
+                    {years.length === 0 ? (
+                        <p className="text-sm text-gray-400 py-8 text-center">종료일과 보증금이 입력된 계약이 없습니다.</p>
+                    ) : (
+                        <>
+                            <div className="flex items-end gap-3 h-44">
+                                {years.map(y => {
+                                    const h = max > 0 ? Math.max(4, (y.deposit / max) * 100) : 4;
+                                    return (
+                                        <div key={y.year} className="flex-1 flex flex-col items-center justify-end h-full relative"
+                                            onMouseEnter={() => setHover(y.year)} onMouseLeave={() => setHover(null)}>
+                                            {hover === y.year && (
+                                                <div className="absolute z-20 bottom-full mb-1 bg-slate-800 text-white text-[11px] rounded px-2.5 py-1.5 whitespace-nowrap shadow-lg pointer-events-none">
+                                                    {y.names.join(', ')}
+                                                </div>
+                                            )}
+                                            <span className="text-[11px] font-bold text-gray-700 mb-1">{(y.deposit / 100000000).toFixed(1)}억</span>
+                                            <div className="w-full rounded-t" style={{ height: h + '%', background: '#2563eb' }}></div>
+                                            <span className="text-[11px] text-gray-500 mt-1.5">{y.year}</span>
+                                            <span className="text-[10px] text-gray-400">{y.count}건</span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                            <p className="mt-4 pt-3 border-t text-xs text-gray-500 flex justify-between">
+                                <span>합계</span><span className="font-bold text-gray-800">{formatKrw(total)}</span>
+                            </p>
+                        </>
+                    )}
+                </div>
+            );
+        }
+
         // --- 대시보드 ---
         function DashboardPage({ leases, onDownloadReport }) {
             const [alertWindow, setAlertWindow] = useState(90);
@@ -450,7 +630,8 @@
                         <StatCard title="관리 계약" value={`${totals.count}건`} subtext="등록된 임대차계약" color="blue" />
                         <StatCard title="총 보증금" value={`₩${totals.deposit.toLocaleString()}`} subtext="예치 중인 보증금 합계" color="indigo" />
                         <StatCard title="월 고정비" value={`₩${totals.monthly.toLocaleString()}`} subtext="임차료 + 관리비" color="emerald" />
-                        <StatCard title="총 임대면적" value={formatArea(totals.area)} subtext="계약면적 합계" color="orange" />
+                        <StatCard title="총 임대면적" value={`${totals.area.toLocaleString()}㎡`}
+                            subtext={`${(totals.area / SQM_PER_PYEONG).toFixed(1)}평 · 계약면적 합계`} color="orange" />
                     </div>
 
                     {overdue.length > 0 && (
@@ -500,7 +681,10 @@
                         )}
                     </div>
 
+                    <LeaseTimeline leases={leases} />
+
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <DepositMaturity leases={leases} />
                         <div className="glass-panel p-6">
                             <h3 className="font-bold text-gray-700 mb-4">용도별 월 고정비</h3>
                             {byUsage.length === 0 ? <p className="text-sm text-gray-400 py-6 text-center">등록된 계약이 없습니다.</p> : (
