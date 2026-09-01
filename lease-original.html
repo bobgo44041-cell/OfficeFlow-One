@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>임대차계약 관리</title>
+
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 한글 폴백 폰트 (다른 iframe 앱들과 동일) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+
+    <!-- OfficeFlow One 세션 브릿지 -->
+    <script>
+        const OFFICEFLOW_STORAGE_KEY = 'officeflow-one-embed-session';
+        const LEGACY_OFFICEFLOW_STORAGE_KEY = 'officeflow-one-mvp-state';
+
+        function getOfficeFlowState() {
+            try {
+                const raw =
+                    window.localStorage.getItem(OFFICEFLOW_STORAGE_KEY) ||
+                    window.localStorage.getItem(LEGACY_OFFICEFLOW_STORAGE_KEY);
+                if (raw) return JSON.parse(raw);
+            } catch (error) {}
+
+            return null;
+        }
+
+        const officeflowState = getOfficeFlowState();
+        const officeflowSession = officeflowState?.session?.authenticated ? officeflowState.session : null;
+        const officeflowUid = String(officeflowSession?.uid || '').trim();
+        const officeflowEmail = String(officeflowSession?.email || '').toLowerCase();
+        const leaseUserKey = (officeflowUid || officeflowEmail || 'guest').replace(/[^a-z0-9]+/gi, '_');
+
+        // 허브 로그인 사용자별로 데이터를 분리한다. firestore.rules 의
+        // ownsApp(appId, 'ofw-lease') 규칙과 짝을 이룬다.
+        window.leaseAppId = `ofw-lease-${leaseUserKey}`;
+        window.officeflowSessionInfo = { uid: officeflowUid, email: officeflowEmail, authenticated: Boolean(officeflowSession) };
+    </script>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
+
+        // 모든 문서는 artifacts/{leaseAppId}/public/data/{컬렉션} 아래에 저장된다.
+        const scopedSegments = (col) => ['artifacts', window.leaseAppId, 'public', 'data', col];
+        const leaseCollection = (db, col) => collection(db, ...scopedSegments(col));
+        const leaseDoc = (db, col, id) => doc(db, ...scopedSegments(col), id);
+
+        window.firebaseModules = {
+            initializeApp, getAuth, onAuthStateChanged,
+            getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc,
+            getAnalytics,
+            leaseCollection, leaseDoc
+        };
+
+        window.userFirebaseConfig = {
+            apiKey: "AIzaSyBfT58Y9XwjalTk0E0NPBWqkVVVOWN9zFQ",
+            authDomain: "officeflow-one.firebaseapp.com",
+            projectId: "officeflow-one",
+            storageBucket: "officeflow-one.firebasestorage.app",
+            messagingSenderId: "1084176732785",
+            appId: "1:1084176732785:web:56e241ddcdb69afdf101d0",
+            measurementId: "G-SYP4NQMGP7"
+        };
+    </script>
+
+    <style>
+        /* 허브(index.html) 및 다른 앱들과 동일한 폰트 스택 */
+        body {
+          background-color: #f3f4f6;
+          font-family: "Pretendard Variable", "Pretendard", "SUIT", "Noto Sans KR",
+            -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        .glass-panel { background: white; border: 1px solid #e5e7eb; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); border-radius: 0.75rem; }
+        .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .spinner { border: 3px solid rgba(0, 0, 0, 0.1); border-radius: 50%; border-top: 3px solid #3b82f6; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .custom-checkbox:checked { background-color: #10b981; border-color: #10b981; }
+        .custom-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scroll::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- 상수 ---
+        const SQM_PER_PYEONG = 3.305785;
+
+        const LEASE_USAGES = ['사무실', '창고', '매장', '공장', '주차장', '기타'];
+
+        const RENEWAL_STATUSES = [
+            { value: 'review',   label: '검토중',     cls: 'bg-slate-100 text-slate-700' },
+            { value: 'renew',    label: '갱신예정',   cls: 'bg-blue-100 text-blue-700' },
+            { value: 'relocate', label: '이전예정',   cls: 'bg-purple-100 text-purple-700' },
+            { value: 'terminate',label: '해지예정',   cls: 'bg-red-100 text-red-700' },
+        ];
+
+        const getRenewalStatus = (value) => RENEWAL_STATUSES.find((s) => s.value === value) || null;
+
+        const EMPTY_LEASE_FORM = {
+            name: '', address: '', usage: '사무실', area: 0,
+            lessorName: '', lessorContact: '',
+            startDate: '', endDate: '',
+            deposit: 0, monthlyRent: 0, maintenanceFee: 0,
+            noticeDays: 60, renewalStatus: 'review',
+            manager: '', docLink: '', memo: '',
+        };
+
+        // --- 유틸 ---
+        const toDateOnly = (dateStr) => {
+            if (!dateStr) return null;
+            const d = new Date(`${dateStr}T00:00:00`);
+            return Number.isNaN(d.getTime()) ? null : d;
+        };
+
+        const todayDateOnly = () => { const t = new Date(); t.setHours(0, 0, 0, 0); return t; };
+
+        const diffDaysFromToday = (dateStr) => {
+            const d = toDateOnly(dateStr);
+            if (!d) return null;
+            return Math.floor((d.getTime() - todayDateOnly().getTime()) / 86400000);
+        };
+
+        const toDateString = (date) => {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        };
+
+        // 갱신 통보 마감일: 계약 종료일에서 통보 기한(일)만큼 앞당긴 날.
+        // 상가건물임대차보호법상 갱신요구는 만료 6개월~1개월 전에 해야 하므로
+        // 종료일보다 이 날짜가 실질 마감이다.
+        const getNoticeDeadline = (lease) => {
+            if (!lease) return null;
+            const end = toDateOnly(lease.endDate);
+            if (!end) return null;
+            const days = parseInt(lease.noticeDays);
+            if (Number.isNaN(days) || days <= 0) return null;
+            return toDateString(new Date(end.getTime() - days * 86400000));
+        };
+
+        // 실제로 챙겨야 하는 날짜: 통보 마감일이 있으면 그것, 없으면 종료일
+        const getActionDate = (lease) => getNoticeDeadline(lease) || lease.endDate || '';
+
+        const num = (v) => parseInt(String(v).replace(/,/g, ''), 10) || 0;
+        const formatKrw = (amount) => num(amount).toLocaleString() + '원';
+        const formatArea = (sqm) => {
+            const v = Number(sqm) || 0;
+            if (!v) return '-';
+            return `${v.toLocaleString()}㎡ (${(v / SQM_PER_PYEONG).toFixed(1)}평)`;
+        };
+
+        // 월 고정비 = 월 임차료 + 관리비
+        const monthlyOutgo = (lease) => num(lease.monthlyRent) + num(lease.maintenanceFee);
+
+        const downloadCSV = (rows, filename) => {
+            const csv = rows.map(r => r.map(c => {
+                const v = String(c === undefined || c === null ? '' : c);
+                return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+            }).join(',')).join('\n');
+            const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = filename; a.click();
+            URL.revokeObjectURL(url);
+        };
+
+        // --- Icons ---
+        const Icons = {
+            Dashboard: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>,
+            Building: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>,
+            Calendar: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>,
+            Settings: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>,
+            Alert: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>,
+            Trash: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>,
+            Edit: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>,
+            Download: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>,
+            Search: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>,
+            XMark: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>,
+            CloudOff: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3l18 18M18.364 5.636A9 9 0 015.636 18.364M12 6a6 6 0 016 6" /></svg>,
+            Coin: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>,
+        };
+
+        // --- 내비게이션 정의 (사이드바와 모바일 하단바가 공유) ---
+        const NAV_GROUPS = [
+            { title: '운영', items: [
+                { id: 'dashboard', label: '대시보드',   short: '홈',   Icon: Icons.Dashboard },
+                { id: 'renewals',  label: '갱신 일정',  short: '갱신', Icon: Icons.Calendar },
+            ]},
+            { title: '계약', items: [
+                { id: 'leases', label: '계약 관리', short: '계약', Icon: Icons.Building },
+            ]},
+            { title: '관리', items: [
+                { id: 'settings', label: '환경설정', short: '설정', Icon: Icons.Settings },
+            ]},
+        ];
+
+        const NAV_ITEMS = NAV_GROUPS.flatMap(g => g.items);
+
+        // --- 공통 UI ---
+        function NavButton({ active, onClick, icon, label }) {
+            return (
+                <button onClick={onClick} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all ${active ? 'bg-blue-600 text-white shadow-md' : 'text-slate-300 hover:bg-slate-700 hover:text-white'}`}>
+                    {icon}<span className="font-medium">{label}</span>
+                </button>
+            );
+        }
+
+        function StatCard({ title, value, subtext, color = 'blue', onClick }) {
+            const borderColorClassMap = {
+                blue: 'border-blue-500', indigo: 'border-indigo-500', purple: 'border-purple-500',
+                emerald: 'border-emerald-500', orange: 'border-orange-500',
+            };
+            return (
+                <div onClick={onClick} className={`glass-panel p-6 border-l-4 ${borderColorClassMap[color] || borderColorClassMap.blue} ${onClick ? 'cursor-pointer hover:bg-gray-50 transition-colors' : ''}`}>
+                    <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">{title}</h3>
+                    <div className="mt-2"><span className="text-3xl font-bold text-gray-900">{value}</span></div>
+                    {subtext && <p className="mt-1 text-sm text-gray-400">{subtext}</p>}
+                </div>
+            );
+        }
+
+        function SetupBanner() {
+            return (
+                <div className="bg-amber-100 border-b border-amber-200 text-amber-900 px-4 py-3 flex items-center justify-between shadow-sm">
+                    <div className="flex items-center gap-3"><div className="text-amber-600"><Icons.CloudOff /></div><p className="text-sm font-bold">데모 모드 (클라우드 연결 안 됨 · 이 브라우저에서만 임시 저장)</p></div>
+                    <button onClick={() => window.location.reload()} className="text-xs bg-white border border-amber-300 px-3 py-1 rounded hover:bg-amber-50">다시 연결</button>
+                </div>
+            );
+        }
+
+        // --- Firebase 연결 ---
+        function useFirebase() {
+            const [services, setServices] = useState(null);
+            const [user, setUser] = useState(null);
+            const [errorMsg, setErrorMsg] = useState('');
+
+            useEffect(() => {
+                let mounted = true;
+                const init = async () => {
+                    const sdkTimeout = setTimeout(() => {
+                        if (mounted && !window.firebaseModules) setErrorMsg('Firebase SDK 로딩 시간 초과 (네트워크/차단 확인 필요)');
+                    }, 5000);
+
+                    while (!window.firebaseModules) {
+                        await new Promise(r => setTimeout(r, 100));
+                        if (!mounted) return;
+                    }
+                    clearTimeout(sdkTimeout);
+
+                    const { initializeApp, getAuth, onAuthStateChanged, getFirestore, getAnalytics } = window.firebaseModules;
+
+                    try {
+                        const connTimeout = setTimeout(() => {
+                            if (mounted && !user) setErrorMsg('서버 연결 응답 없음 (네트워크 방화벽 이슈 또는 로그인 세션 만료)');
+                        }, 10000);
+
+                        if (!window._firebaseAppInstance) window._firebaseAppInstance = initializeApp(window.userFirebaseConfig);
+                        const app = window._firebaseAppInstance;
+                        const auth = getAuth(app);
+                        const db = getFirestore(app);
+                        try { getAnalytics(app); } catch (e) {}
+
+                        // OfficeFlow One 허브에서 Google 로그인한 세션을 그대로 승계한다.
+                        onAuthStateChanged(auth, (u) => {
+                            if (!mounted) return;
+                            clearTimeout(connTimeout);
+                            if (u) { setUser(u); setServices({ db, auth }); }
+                            else setErrorMsg('OfficeFlow One 로그인 세션을 찾지 못했습니다. 허브에서 Google 로그인 후 다시 실행해 주세요.');
+                        }, (err) => { clearTimeout(connTimeout); setErrorMsg(`인증 오류: ${err.message}`); });
+                    } catch (err) {
+                        console.error('Firebase init failed', err);
+                        setErrorMsg(`초기화 오류: ${err.message}`);
+                    }
+                };
+                init();
+                return () => { mounted = false; };
+            }, []);
+
+            return { services, user, errorMsg };
+        }
+
+        // --- 대시보드 ---
+        function DashboardPage({ leases, onDownloadReport }) {
+            const [alertWindow, setAlertWindow] = useState(90);
+
+            const totals = useMemo(() => ({
+                count: leases.length,
+                deposit: leases.reduce((a, l) => a + num(l.deposit), 0),
+                monthly: leases.reduce((a, l) => a + monthlyOutgo(l), 0),
+                area: leases.reduce((a, l) => a + (Number(l.area) || 0), 0),
+            }), [leases]);
+
+            // 갱신 통보 마감일 기준으로 본다. 종료일만 보면 통보 시기를 놓친다.
+            const dated = useMemo(() => leases.map(l => {
+                const actionDate = getActionDate(l);
+                const dDay = diffDaysFromToday(actionDate);
+                if (dDay === null) return null;
+                return { ...l, actionDate, dDay, isNotice: Boolean(getNoticeDeadline(l)) };
+            }).filter(Boolean), [leases]);
+
+            const upcoming = useMemo(() => dated.filter(l => l.dDay >= 0 && l.dDay <= alertWindow).sort((a, b) => a.dDay - b.dDay), [dated, alertWindow]);
+            const overdue = useMemo(() => dated.filter(l => l.dDay < 0).sort((a, b) => a.dDay - b.dDay), [dated]);
+
+            const byUsage = useMemo(() => {
+                const c = {};
+                leases.forEach(l => { const k = l.usage || '기타'; c[k] = (c[k] || 0) + monthlyOutgo(l); });
+                return Object.entries(c).sort((a, b) => b[1] - a[1]);
+            }, [leases]);
+
+            const topCost = useMemo(() => [...leases].sort((a, b) => monthlyOutgo(b) - monthlyOutgo(a)).slice(0, 5), [leases]);
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <h2 className="text-2xl font-bold text-gray-800">현황 대시보드</h2>
+                        <button onClick={onDownloadReport} className="text-sm bg-slate-700 text-white px-3 py-1.5 rounded flex items-center gap-1 hover:bg-slate-800 w-fit">
+                            <Icons.Download /> 운영 리포트 CSV
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <StatCard title="관리 계약" value={`${totals.count}건`} subtext="등록된 임대차계약" color="blue" />
+                        <StatCard title="총 보증금" value={`₩${totals.deposit.toLocaleString()}`} subtext="예치 중인 보증금 합계" color="indigo" />
+                        <StatCard title="월 고정비" value={`₩${totals.monthly.toLocaleString()}`} subtext="임차료 + 관리비" color="emerald" />
+                        <StatCard title="총 임대면적" value={formatArea(totals.area)} subtext="계약면적 합계" color="orange" />
+                    </div>
+
+                    {overdue.length > 0 && (
+                        <div className="bg-slate-800 text-white rounded-lg p-4">
+                            <h4 className="font-bold text-sm mb-1 flex items-center gap-2"><Icons.Alert /> 기한 경과 ({overdue.length}건)</h4>
+                            <p className="text-[11px] text-slate-300 mb-3">이미 마감일이 지났습니다. 갱신 또는 해지 의사를 즉시 확인하세요.</p>
+                            <div className="flex flex-wrap gap-2">
+                                {overdue.map(l => (
+                                    <div key={l.id} className="bg-slate-700 px-3 py-1.5 rounded text-xs">
+                                        <span className="font-bold mr-2">{l.name}</span>
+                                        <span className="font-mono text-slate-300">{l.actionDate}</span>
+                                        <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500 text-white">{Math.abs(l.dDay)}일 경과</span>
+                                        {l.isNotice && <span className="ml-1 text-[10px] text-amber-300">갱신통보 기한</span>}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                            <h4 className="text-red-800 font-bold text-sm flex items-center gap-2"><Icons.Alert /> 갱신 대응 필요 (D-{alertWindow})</h4>
+                            <div className="flex gap-1">
+                                {[30, 90, 180].map(d => (
+                                    <button key={d} onClick={() => setAlertWindow(d)}
+                                        className={`px-2.5 py-1 rounded text-[11px] font-bold transition-colors ${alertWindow === d ? 'bg-red-600 text-white' : 'bg-white text-red-600 border border-red-200 hover:bg-red-100'}`}>
+                                        {d}일
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <p className="text-[11px] text-red-500 mb-3">갱신 통보 기한이 설정된 계약은 종료일이 아니라 통보 마감일 기준으로 표시됩니다.</p>
+                        {upcoming.length === 0 ? (
+                            <p className="text-xs text-red-400 py-2">{alertWindow}일 이내 대응할 계약이 없습니다.</p>
+                        ) : (
+                            <div className="flex flex-wrap gap-2">
+                                {upcoming.map(l => (
+                                    <div key={l.id} className="bg-white px-3 py-1.5 rounded border border-red-100 text-xs shadow-sm">
+                                        <span className="font-bold text-gray-700 mr-2">{l.name}</span>
+                                        <span className="text-red-500 font-mono font-bold">{l.actionDate}</span>
+                                        <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">D-{l.dDay}</span>
+                                        {l.isNotice && <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">갱신통보</span>}
+                                        {l.manager && <span className="ml-1 text-[10px] text-gray-400">{l.manager}</span>}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="glass-panel p-6">
+                            <h3 className="font-bold text-gray-700 mb-4">용도별 월 고정비</h3>
+                            {byUsage.length === 0 ? <p className="text-sm text-gray-400 py-6 text-center">등록된 계약이 없습니다.</p> : (
+                                <div className="space-y-3">
+                                    {byUsage.map(([usage, cost]) => {
+                                        const pct = totals.monthly > 0 ? Math.round((cost / totals.monthly) * 100) : 0;
+                                        return (
+                                            <div key={usage}>
+                                                <div className="flex justify-between text-sm mb-1">
+                                                    <span className="text-gray-700">{usage}</span>
+                                                    <span className="text-gray-500">{formatKrw(cost)} <span className="text-gray-400">({pct}%)</span></span>
+                                                </div>
+                                                <div className="h-2 bg-gray-100 rounded"><div className="h-2 bg-blue-500 rounded" style={{ width: pct + '%' }}></div></div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                        <div className="glass-panel p-6">
+                            <h3 className="font-bold text-gray-700 mb-4">월 고정비 상위</h3>
+                            {topCost.length === 0 ? <p className="text-sm text-gray-400 py-6 text-center">등록된 계약이 없습니다.</p> : (
+                                <table className="w-full text-sm">
+                                    <thead className="text-xs text-gray-500 border-b"><tr><th className="text-left pb-2">물건명</th><th className="text-left pb-2">용도</th><th className="text-right pb-2">월 고정비</th></tr></thead>
+                                    <tbody className="divide-y divide-gray-100">
+                                        {topCost.map(l => (
+                                            <tr key={l.id}>
+                                                <td className="py-2 font-medium text-gray-800">{l.name}</td>
+                                                <td className="py-2 text-gray-500 text-xs">{l.usage}</td>
+                                                <td className="py-2 text-right font-bold text-gray-900">{formatKrw(monthlyOutgo(l))}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 계약 관리 ---
+        function LeaseManagement({ leases, onAdd, onUpdate, onDelete }) {
+            const [form, setForm] = useState({ ...EMPTY_LEASE_FORM });
+            const [editId, setEditId] = useState(null);
+            const [search, setSearch] = useState('');
+            const formRef = useRef(null);
+
+            const filtered = useMemo(() => {
+                const q = search.trim().toLowerCase();
+                const rows = [...leases].sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko'));
+                if (!q) return rows;
+                return rows.filter(l => [l.name, l.address, l.lessorName, l.manager, l.usage].join(' ').toLowerCase().includes(q));
+            }, [leases, search]);
+
+            const reset = () => { setForm({ ...EMPTY_LEASE_FORM }); setEditId(null); };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (!form.name.trim()) return;
+                if (form.startDate && form.endDate && form.startDate > form.endDate) {
+                    alert('계약 시작일이 종료일보다 늦습니다.');
+                    return;
+                }
+                if (editId) onUpdate(editId, { ...form }); else onAdd({ ...form });
+                reset();
+            };
+
+            const startEdit = (l) => {
+                setEditId(l.id);
+                setForm({ ...EMPTY_LEASE_FORM, ...l });
+                formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+
+            const handleDownload = () => {
+                downloadCSV([
+                    ['물건명', '주소', '용도', '계약면적(㎡)', '평', '임대인', '임대인연락처', '시작일', '종료일',
+                     '보증금', '월임차료', '관리비', '월고정비', '통보기한(일)', '통보마감일', '갱신상태', '담당자', '문서링크', '비고'],
+                    ...filtered.map(l => [
+                        l.name, l.address || '', l.usage || '', Number(l.area) || 0,
+                        ((Number(l.area) || 0) / SQM_PER_PYEONG).toFixed(1),
+                        l.lessorName || '', l.lessorContact || '', l.startDate || '', l.endDate || '',
+                        num(l.deposit), num(l.monthlyRent), num(l.maintenanceFee), monthlyOutgo(l),
+                        l.noticeDays || '', getNoticeDeadline(l) || '',
+                        (getRenewalStatus(l.renewalStatus) || {}).label || '',
+                        l.manager || '', l.docLink || '', l.memo || '',
+                    ])
+                ], 'lease_contracts.csv');
+            };
+
+            const field = (label, node) => (
+                <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">{label}</label>{node}</div>
+            );
+            const input = (key, props = {}) => (
+                <input className="w-full border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                    value={form[key]} onChange={e => setForm({ ...form, [key]: props.type === 'number' ? (parseInt(e.target.value) || 0) : e.target.value })} {...props} />
+            );
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex flex-wrap justify-between items-center gap-3">
+                        <h2 className="text-2xl font-bold text-gray-800">계약 관리</h2>
+                        <button onClick={handleDownload} className="text-sm bg-green-600 text-white px-3 py-1.5 rounded flex items-center gap-1 hover:bg-green-700"><Icons.Download /> 엑셀 다운로드</button>
+                    </div>
+
+                    <div className="flex gap-6 flex-col lg:flex-row">
+                        <div ref={formRef} className="glass-panel p-6 w-full lg:w-[380px] lg:shrink-0 h-fit">
+                            <h3 className="font-semibold text-gray-700 mb-4">{editId ? '계약 정보 수정' : '신규 계약 등록'}</h3>
+                            <form onSubmit={handleSubmit} className="space-y-3">
+                                {input('name', { placeholder: '물건명 (예: 본사 사무실)', required: true })}
+                                {input('address', { placeholder: '주소' })}
+                                <div className="grid grid-cols-2 gap-2">
+                                    {field('용도', (
+                                        <select className="w-full border rounded px-3 py-2 text-sm bg-white" value={form.usage} onChange={e => setForm({ ...form, usage: e.target.value })}>
+                                            {LEASE_USAGES.map(u => <option key={u} value={u}>{u}</option>)}
+                                        </select>
+                                    ))}
+                                    {field('계약면적 (㎡)', input('area', { type: 'number', min: '0', step: '0.01' }))}
+                                </div>
+                                {Number(form.area) > 0 && (
+                                    <p className="text-[10px] text-gray-400 -mt-1 ml-1">≈ {(Number(form.area) / SQM_PER_PYEONG).toFixed(1)}평</p>
+                                )}
+
+                                <div className="grid grid-cols-2 gap-2">
+                                    {field('임대인', input('lessorName', { placeholder: '성명 / 법인명' }))}
+                                    {field('임대인 연락처', input('lessorContact', { placeholder: '연락처' }))}
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                    {field('계약 시작일', input('startDate', { type: 'date' }))}
+                                    {field('계약 종료일', input('endDate', { type: 'date' }))}
+                                </div>
+                                {form.startDate && form.endDate && form.startDate > form.endDate && (
+                                    <p className="text-[10px] text-red-500 -mt-1 ml-1">시작일이 종료일보다 늦습니다.</p>
+                                )}
+
+                                {field('보증금 (원)', input('deposit', { type: 'number', min: '0' }))}
+                                <div className="grid grid-cols-2 gap-2">
+                                    {field('월 임차료 (원)', input('monthlyRent', { type: 'number', min: '0' }))}
+                                    {field('월 관리비 (원)', input('maintenanceFee', { type: 'number', min: '0' }))}
+                                </div>
+                                {(num(form.monthlyRent) + num(form.maintenanceFee)) > 0 && (
+                                    <p className="text-[10px] text-blue-600 font-bold -mt-1 ml-1">월 고정비 {formatKrw(num(form.monthlyRent) + num(form.maintenanceFee))}</p>
+                                )}
+
+                                <div className="bg-amber-50 p-3 rounded border border-amber-100">
+                                    <label className="text-[10px] text-amber-700 block mb-1 font-bold">갱신 통보 기한 (종료 N일 전까지)</label>
+                                    <input type="number" min="0" className="w-full border rounded px-3 py-1.5 text-sm"
+                                        value={form.noticeDays} onChange={e => setForm({ ...form, noticeDays: parseInt(e.target.value) || 0 })} />
+                                    {getNoticeDeadline(form) && (
+                                        <p className="text-[10px] text-amber-700 mt-1 font-bold">통보 마감일: {getNoticeDeadline(form)}</p>
+                                    )}
+                                    <p className="text-[10px] text-amber-600 mt-1">상가건물임대차보호법상 갱신요구는 만료 6개월~1개월 전에 해야 합니다.</p>
+                                </div>
+
+                                {field('갱신 상태', (
+                                    <select className="w-full border rounded px-3 py-2 text-sm bg-white" value={form.renewalStatus} onChange={e => setForm({ ...form, renewalStatus: e.target.value })}>
+                                        {RENEWAL_STATUSES.map(st => <option key={st.value} value={st.value}>{st.label}</option>)}
+                                    </select>
+                                ))}
+                                {input('manager', { placeholder: '사내 담당자' })}
+                                {input('docLink', { placeholder: '관련 문서 링크 (선택)' })}
+                                <textarea className="w-full border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" rows="2"
+                                    placeholder="비고" value={form.memo} onChange={e => setForm({ ...form, memo: e.target.value })} />
+
+                                <button className="w-full bg-blue-600 text-white py-2 rounded font-bold hover:bg-blue-700">{editId ? '수정 저장' : '등록'}</button>
+                                {editId && <button type="button" onClick={reset} className="w-full text-xs text-gray-400">취소</button>}
+                            </form>
+                        </div>
+
+                        <div className="flex-1 space-y-3 min-w-0">
+                            <div className="relative">
+                                <input type="text" placeholder="물건명, 주소, 임대인, 담당자 검색..." value={search} onChange={e => setSearch(e.target.value)}
+                                    className="w-full pl-8 pr-3 py-2 text-sm border rounded bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                                <span className="absolute left-2.5 top-2.5 text-gray-400"><Icons.Search /></span>
+                            </div>
+
+                            {filtered.length === 0 ? (
+                                <div className="glass-panel p-12 text-center text-gray-400 text-sm">
+                                    {leases.length === 0 ? '등록된 계약이 없습니다. 왼쪽 양식으로 첫 계약을 추가하세요.' : '검색 결과가 없습니다.'}
+                                </div>
+                            ) : filtered.map(l => {
+                                const status = getRenewalStatus(l.renewalStatus);
+                                const notice = getNoticeDeadline(l);
+                                const dDay = diffDaysFromToday(getActionDate(l));
+                                return (
+                                    <div key={l.id} className="glass-panel p-5">
+                                        <div className="flex flex-wrap items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <h4 className="font-bold text-gray-900">{l.name}</h4>
+                                                    <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px]">{l.usage}</span>
+                                                    {status && <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${status.cls}`}>{status.label}</span>}
+                                                    {dDay !== null && dDay >= 0 && dDay <= 90 && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">D-{dDay}</span>}
+                                                    {dDay !== null && dDay < 0 && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600 text-white">{Math.abs(dDay)}일 경과</span>}
+                                                </div>
+                                                {l.address && <p className="text-xs text-gray-500 mt-1">{l.address}</p>}
+                                            </div>
+                                            <div className="flex gap-3 shrink-0">
+                                                <button onClick={() => startEdit(l)} className="text-blue-400 hover:text-blue-600"><Icons.Edit /></button>
+                                                <button onClick={() => onDelete(l.id)} className="text-red-300 hover:text-red-500"><Icons.Trash /></button>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 mt-4 text-sm">
+                                            <div><p className="text-[10px] text-gray-400">계약기간</p><p className="text-gray-800">{l.startDate || '-'} ~ {l.endDate || '-'}</p></div>
+                                            <div><p className="text-[10px] text-gray-400">임대면적</p><p className="text-gray-800">{formatArea(l.area)}</p></div>
+                                            <div><p className="text-[10px] text-gray-400">보증금</p><p className="text-gray-800 font-medium">{formatKrw(l.deposit)}</p></div>
+                                            <div><p className="text-[10px] text-gray-400">월 고정비</p><p className="text-gray-900 font-bold">{formatKrw(monthlyOutgo(l))}</p>
+                                                <p className="text-[10px] text-gray-400">임차료 {formatKrw(l.monthlyRent)} · 관리비 {formatKrw(l.maintenanceFee)}</p></div>
+                                            <div><p className="text-[10px] text-gray-400">임대인</p><p className="text-gray-800">{l.lessorName || '-'}</p>
+                                                {l.lessorContact && <p className="text-[10px] text-gray-400">{l.lessorContact}</p>}</div>
+                                            <div><p className="text-[10px] text-gray-400">담당자</p><p className="text-gray-800">{l.manager || '-'}</p></div>
+                                            <div><p className="text-[10px] text-gray-400">갱신 통보 마감</p><p className="text-amber-700 font-medium">{notice || '-'}</p></div>
+                                            {l.docLink && (
+                                                <div><p className="text-[10px] text-gray-400">관련 문서</p>
+                                                    <a href={l.docLink} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-xs break-all">링크 열기</a></div>
+                                            )}
+                                        </div>
+                                        {l.memo && <p className="mt-3 pt-3 border-t text-xs text-gray-500 whitespace-pre-wrap">{l.memo}</p>}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 갱신 일정 ---
+        function RenewalSchedulePage({ leases }) {
+            const [monthsAhead, setMonthsAhead] = useState(12);
+
+            const rows = useMemo(() => leases.map(l => {
+                const actionDate = getActionDate(l);
+                return { ...l, actionDate, dDay: diffDaysFromToday(actionDate), isNotice: Boolean(getNoticeDeadline(l)) };
+            }), [leases]);
+
+            const undated = useMemo(() => rows.filter(r => r.dDay === null), [rows]);
+            const past = useMemo(() => rows.filter(r => r.dDay !== null && r.dDay < 0).sort((a, b) => a.dDay - b.dDay), [rows]);
+
+            const months = useMemo(() => {
+                const base = todayDateOnly();
+                const buckets = [];
+                for (let i = 0; i < monthsAhead; i++) {
+                    const d = new Date(base.getFullYear(), base.getMonth() + i, 1);
+                    buckets.push({ key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, year: d.getFullYear(), month: d.getMonth() + 1, items: [] });
+                }
+                const index = new Map(buckets.map(b => [b.key, b]));
+                rows.forEach(r => {
+                    if (r.dDay === null || r.dDay < 0) return;
+                    const bucket = index.get(String(r.actionDate).slice(0, 7));
+                    if (bucket) bucket.items.push(r);
+                });
+                buckets.forEach(b => b.items.sort((x, y) => x.dDay - y.dDay));
+                return buckets;
+            }, [rows, monthsAhead]);
+
+            // 연속으로 비어 있는 달은 한 줄로 접어 스크롤 낭비를 줄인다.
+            const grouped = useMemo(() => {
+                const groups = [];
+                months.forEach(m => {
+                    const isEmpty = m.items.length === 0;
+                    const last = groups[groups.length - 1];
+                    if (isEmpty && last && last.empty) last.months.push(m);
+                    else groups.push({ empty: isEmpty, months: [m] });
+                });
+                return groups;
+            }, [months]);
+
+            const upcoming = months.reduce((a, m) => a + m.items.length, 0);
+            const upcomingCost = months.reduce((a, m) => a + m.items.reduce((x, i) => x + monthlyOutgo(i) * 12, 0), 0);
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <h2 className="text-2xl font-bold text-gray-800">갱신 일정</h2>
+                        <div className="flex gap-1">
+                            {[6, 12, 24].map(m => (
+                                <button key={m} onClick={() => setMonthsAhead(m)}
+                                    className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${monthsAhead === m ? 'bg-slate-800 text-white' : 'bg-white border text-slate-600 hover:bg-gray-50'}`}>
+                                    {m}개월
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <StatCard title={`향후 ${monthsAhead}개월 갱신`} value={`${upcoming}건`} subtext="대응이 필요한 계약" color="blue" />
+                        <StatCard title="연 환산 고정비" value={`₩${upcomingCost.toLocaleString()}`} subtext="해당 기간 갱신 계약 합계" color="emerald" />
+                    </div>
+
+                    {past.length > 0 && (
+                        <div className="bg-slate-800 text-white rounded-lg p-4">
+                            <h4 className="font-bold text-sm mb-1 flex items-center gap-2"><Icons.Alert /> 기한 경과 ({past.length}건)</h4>
+                            <p className="text-[11px] text-slate-300 mb-3">일정에 잡히기 전에 먼저 정리해야 하는 건입니다.</p>
+                            <div className="space-y-1">
+                                {past.map(l => (
+                                    <div key={l.id} className="flex flex-wrap items-center gap-2 bg-slate-700 px-3 py-2 rounded text-xs">
+                                        <span className="font-bold">{l.name}</span>
+                                        <span className="font-mono text-slate-300">{l.actionDate}</span>
+                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500">{Math.abs(l.dDay)}일 경과</span>
+                                        {l.isNotice && <span className="text-[10px] text-amber-300">갱신통보 기한</span>}
+                                        <span className="ml-auto text-slate-300">{l.manager || '담당 미지정'}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="space-y-4">
+                        {grouped.map(group => {
+                            if (group.empty) {
+                                const first = group.months[0], last = group.months[group.months.length - 1];
+                                const range = group.months.length === 1
+                                    ? `${first.year}년 ${first.month}월`
+                                    : `${first.year}년 ${first.month}월 ~ ${last.year}년 ${last.month}월`;
+                                return (
+                                    <div key={'empty-' + first.key} className="flex items-center gap-3 px-5 py-2.5 rounded-lg border border-dashed border-gray-200 text-xs text-gray-400">
+                                        <span className="font-medium text-gray-500">{range}</span><span>갱신 예정 없음</span>
+                                        <span className="ml-auto">{group.months.length}개월</span>
+                                    </div>
+                                );
+                            }
+                            const m = group.months[0];
+                            const cost = m.items.reduce((a, i) => a + monthlyOutgo(i) * 12, 0);
+                            return (
+                                <div key={m.key} className="glass-panel overflow-hidden">
+                                    <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 bg-gray-50 border-b">
+                                        <div className="flex items-baseline gap-2">
+                                            <span className="font-bold text-gray-800">{m.year}년 {m.month}월</span>
+                                            <span className="text-xs text-gray-500">{m.items.length}건</span>
+                                        </div>
+                                        <span className="text-xs font-bold text-emerald-600">연 환산 ₩{cost.toLocaleString()}</span>
+                                    </div>
+                                    <div className="divide-y">
+                                        {m.items.map(l => {
+                                            const status = getRenewalStatus(l.renewalStatus);
+                                            return (
+                                                <div key={l.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm hover:bg-gray-50">
+                                                    <span className="font-mono text-xs text-gray-500 w-24">{l.actionDate}</span>
+                                                    <span className="font-medium text-gray-900">{l.name}</span>
+                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${l.isNotice ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-gray-100 text-gray-500'}`}>
+                                                        {l.isNotice ? '갱신통보 기한' : '계약 종료일'}
+                                                    </span>
+                                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${l.dDay <= 30 ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'}`}>D-{l.dDay}</span>
+                                                    {status && <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${status.cls}`}>{status.label}</span>}
+                                                    <span className="ml-auto text-xs text-gray-400">{l.manager || '담당 미지정'}</span>
+                                                    <span className="text-xs font-bold text-gray-700 w-28 text-right">{formatKrw(monthlyOutgo(l) * 12)}</span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    {undated.length > 0 && (
+                        <div className="glass-panel p-5">
+                            <h4 className="font-bold text-sm text-gray-700 mb-1">기한 미설정 ({undated.length}건)</h4>
+                            <p className="text-[11px] text-gray-400 mb-3">계약 종료일이 없어 일정에 잡히지 않습니다. 날짜를 채워주세요.</p>
+                            <div className="flex flex-wrap gap-2">
+                                {undated.map(l => <span key={l.id} className="px-3 py-1.5 rounded border text-xs text-gray-600">{l.name}</span>)}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // --- 환경설정 ---
+        function SettingsPage({ isDemoMode }) {
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <h2 className="text-2xl font-bold text-gray-800">환경설정</h2>
+                    <div className="glass-panel p-8 max-w-xl">
+                        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><Icons.Settings /> 클라우드 연결</h3>
+                        <div className="border rounded p-3 bg-slate-50 text-xs text-slate-600 space-y-1">
+                            <p className="flex justify-between"><span className="text-slate-400">프로젝트</span><span className="font-mono">{window.userFirebaseConfig?.projectId || '-'}</span></p>
+                            <p className="flex justify-between"><span className="text-slate-400">로그인 계정</span><span className="font-mono">{window.officeflowSessionInfo.email || '-'}</span></p>
+                            <p className="flex justify-between gap-2"><span className="text-slate-400 shrink-0">데이터 공간</span><span className="font-mono truncate">{window.leaseAppId}</span></p>
+                            <p className="pt-1 text-[11px] text-slate-400">
+                                {isDemoMode ? '데모 모드: 이 브라우저에서만 임시 저장됩니다.' : 'OfficeFlow One 로그인 계정별로 데이터가 분리 저장됩니다.'}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 메인 ---
+        function App() {
+            const { services, user, errorMsg } = useFirebase();
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [leases, setLeases] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [isDemoMode, setIsDemoMode] = useState(false);
+
+            useEffect(() => {
+                if (isDemoMode) { setLoading(false); return; }
+                if (!services || !user) return;
+                const { leaseCollection, onSnapshot } = window.firebaseModules;
+                const unsub = onSnapshot(leaseCollection(services.db, 'leases'),
+                    (snap) => { setLeases(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
+                    (err) => { if (err.code === 'permission-denied') setIsDemoMode(true); setLoading(false); }
+                );
+                return () => unsub();
+            }, [services, user, isDemoMode]);
+
+            const handleAdd = async (data) => {
+                const payload = { ...data, createdAt: new Date().toISOString() };
+                if (isDemoMode) {
+                    setLeases(prev => [...prev, { ...payload, id: 'local_' + Date.now() }]);
+                    return;
+                }
+                try {
+                    const { addDoc, leaseCollection } = window.firebaseModules;
+                    await addDoc(leaseCollection(services.db, 'leases'), payload);
+                } catch (e) {
+                    console.error('lease add failed', e);
+                    alert('저장에 실패했습니다. Firestore 규칙을 확인하세요.');
+                }
+            };
+
+            const handleUpdate = async (id, data) => {
+                if (isDemoMode) {
+                    setLeases(prev => prev.map(l => l.id === id ? { ...l, ...data } : l));
+                    return;
+                }
+                try {
+                    const { updateDoc, leaseDoc } = window.firebaseModules;
+                    await updateDoc(leaseDoc(services.db, 'leases', id), { ...data, updatedAt: new Date().toISOString() });
+                } catch (e) {
+                    console.error('lease update failed', e);
+                    alert('수정에 실패했습니다.');
+                }
+            };
+
+            const handleDelete = async (id) => {
+                const target = leases.find(l => l.id === id);
+                if (!confirm(`'${target?.name || id}' 계약을 삭제합니다. 계속하시겠습니까?`)) return;
+                if (isDemoMode) {
+                    setLeases(prev => prev.filter(l => l.id !== id));
+                    return;
+                }
+                try {
+                    const { deleteDoc, leaseDoc } = window.firebaseModules;
+                    await deleteDoc(leaseDoc(services.db, 'leases', id));
+                } catch (e) {
+                    console.error('lease delete failed', e);
+                    alert('삭제에 실패했습니다.');
+                }
+            };
+
+            const handleDownloadOpsReport = () => {
+                const today = new Date().toISOString().slice(0, 10);
+                const deposit = leases.reduce((a, l) => a + num(l.deposit), 0);
+                const monthly = leases.reduce((a, l) => a + monthlyOutgo(l), 0);
+                const area = leases.reduce((a, l) => a + (Number(l.area) || 0), 0);
+                const withDDay = leases
+                    .map(l => ({ l, actionDate: getActionDate(l), dDay: diffDaysFromToday(getActionDate(l)) }))
+                    .filter(x => x.dDay !== null);
+                const soon = withDDay.filter(x => x.dDay >= 0 && x.dDay <= 180).sort((a, b) => a.dDay - b.dDay);
+                const past = withDDay.filter(x => x.dDay < 0).sort((a, b) => a.dDay - b.dDay);
+
+                downloadCSV([
+                    ['리포트일자', today],
+                    ['관리 계약', `${leases.length}`],
+                    ['총 보증금(원)', `${deposit}`],
+                    ['월 고정비(원)', `${monthly}`],
+                    ['연 고정비(원)', `${monthly * 12}`],
+                    ['총 임대면적(㎡)', `${area}`],
+                    ['총 임대면적(평)', (area / SQM_PER_PYEONG).toFixed(1)],
+                    [],
+                    ['기한 경과', '대응 기한', '경과일', '담당자', '갱신상태'],
+                    ...past.map(x => [x.l.name, x.actionDate || '-', `${Math.abs(x.dDay)}일`, x.l.manager || '-', (getRenewalStatus(x.l.renewalStatus) || {}).label || '-']),
+                    [],
+                    ['갱신 대응 필요 (D-180)', '대응 기한', '남은일수', '구분', '담당자', '갱신상태'],
+                    ...soon.map(x => [x.l.name, x.actionDate || '-', `D-${x.dDay}`,
+                        getNoticeDeadline(x.l) ? '갱신통보 기한' : '계약 종료일', x.l.manager || '-',
+                        (getRenewalStatus(x.l.renewalStatus) || {}).label || '-']),
+                ], `lease_report_${today}.csv`);
+            };
+
+            if ((!services || !user) && !isDemoMode) {
+                if (errorMsg) return (
+                    <div className="h-screen flex items-center justify-center p-4">
+                        <div className="bg-white p-8 rounded shadow text-center">
+                            <p className="text-red-500 mb-4">{errorMsg}</p>
+                            <button onClick={() => setIsDemoMode(true)} className="bg-blue-600 text-white px-4 py-2 rounded font-bold">데모 모드로 시작</button>
+                            <button onClick={() => window.location.reload()} className="ml-2 bg-gray-200 px-4 py-2 rounded">다시 연결</button>
+                        </div>
+                    </div>
+                );
+                return <div className="h-screen flex items-center justify-center"><div className="spinner"></div></div>;
+            }
+
+            return (
+                <div className="flex h-screen overflow-hidden bg-[#f3f4f6] flex-col">
+                    {isDemoMode && <SetupBanner />}
+                    <div className="flex flex-1 overflow-hidden">
+                        <aside className="w-64 bg-slate-900 text-white hidden md:flex flex-col shadow-2xl z-20">
+                            <div className="p-6 border-b border-slate-800 font-bold text-blue-400 text-xl tracking-tight">임대차계약</div>
+                            <nav className="flex-1 p-4 space-y-5 overflow-y-auto custom-scroll">
+                                {NAV_GROUPS.map(group => (
+                                    <div key={group.title} className={group.title === '관리' ? 'pt-4 border-t border-slate-800' : ''}>
+                                        <p className="px-3 mb-2 text-[11px] font-bold tracking-wider text-slate-400 uppercase">{group.title}</p>
+                                        <div className="space-y-2">
+                                            {group.items.map(item => (
+                                                <NavButton key={item.id} active={activeTab === item.id}
+                                                    onClick={() => setActiveTab(item.id)} icon={<item.Icon />} label={item.label} />
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </nav>
+                        </aside>
+
+                        <main className="flex-1 overflow-y-auto p-4 pb-24 md:p-8 md:pb-8 relative custom-scroll">
+                            {loading ? <div className="flex justify-center mt-20"><div className="spinner"></div></div> : (
+                                <div className="max-w-7xl mx-auto">
+                                    {activeTab === 'dashboard' && <DashboardPage leases={leases} onDownloadReport={handleDownloadOpsReport} />}
+                                    {activeTab === 'renewals' && <RenewalSchedulePage leases={leases} />}
+                                    {activeTab === 'leases' && <LeaseManagement leases={leases} onAdd={handleAdd} onUpdate={handleUpdate} onDelete={handleDelete} />}
+                                    {activeTab === 'settings' && <SettingsPage isDemoMode={isDemoMode} />}
+                                </div>
+                            )}
+                        </main>
+                    </div>
+
+                    {/* 모바일에서는 사이드바 대신 하단 내비를 쓴다 (다른 앱들과 동일한 패턴) */}
+                    <nav className="md:hidden fixed bottom-0 inset-x-0 z-50 flex justify-around bg-white/95 backdrop-blur border-t border-slate-200 px-1 py-2 shadow-[0_-4px_20px_rgba(0,0,0,0.06)]">
+                        {NAV_ITEMS.map(item => (
+                            <button key={item.id} onClick={() => setActiveTab(item.id)}
+                                className={`flex flex-col items-center gap-1 px-2 py-1 rounded transition-colors ${activeTab === item.id ? 'text-blue-600' : 'text-slate-400'}`}>
+                                <item.Icon />
+                                <span className="text-[10px] font-medium leading-none">{item.short}</span>
+                            </button>
+                        ))}
+                    </nav>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

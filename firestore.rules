@@ -49,6 +49,7 @@ service cloud.firestore {
       allow read, write: if
         ownsApp(appId, 'ofw-corp-assets') ||
         ownsApp(appId, 'ofw-fixed-assets') ||
+        ownsApp(appId, 'ofw-lease') ||
         ownsApp(appId, 'ofw-smartwork-calendar') ||
         ownsApp(appId, 'ofw-software-license') ||
         ownsApp(appId, 'ofw-travel-manager') ||
