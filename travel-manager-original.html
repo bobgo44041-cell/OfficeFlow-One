@@ -990,7 +990,7 @@
                                                             <div className="font-semibold text-slate-800">{idx + 1}차 변경</div>
                                                             <Badge color={STATUS_META[entry.status]?.color || 'gray'}>{STATUS_META[entry.status]?.label || '기록'}</Badge>
                                                         </div>
-                                                        <div className="mt-2 text-slate-600">{entry.previousStartDate || '-'} ~ {entry.previousEndDate || '-'} -> {entry.requestedStartDate || '-'} ~ {entry.requestedEndDate || '-'}</div>
+                                                        <div className="mt-2 text-slate-600">{entry.previousStartDate || '-'} ~ {entry.previousEndDate || '-'} → {entry.requestedStartDate || '-'} ~ {entry.requestedEndDate || '-'}</div>
                                                         <div className="mt-1 text-xs text-slate-500">요청일 {entry.requestedAt || '-'} / 추가비용 {getTripCurrency(trip)} {formatMoney(entry.extraCost || 0)}</div>
                                                         {entry.reason && <div className="mt-1 text-xs text-slate-500">사유: {entry.reason}</div>}
                                                     </div>
@@ -1337,7 +1337,7 @@
                                                     <div>
                                                         <div className="font-semibold text-slate-800">{getEmployeeName(trip)} / {trip.project || '프로젝트 미정'}</div>
                                                         <div className="text-xs text-slate-500 mt-1">{trip.startDate} ~ {trip.endDate} / {getPrimaryDestination(trip)}</div>
-                                                        {trip.originalItinerary?.endDate && trip.originalItinerary.endDate !== trip.endDate && <div className="text-xxs text-orange-700 mt-1">최초 귀국 {trip.originalItinerary.endDate} -> 현재 {trip.endDate}</div>}
+                                                        {trip.originalItinerary?.endDate && trip.originalItinerary.endDate !== trip.endDate && <div className="text-xxs text-orange-700 mt-1">최초 귀국 {trip.originalItinerary.endDate} → 현재 {trip.endDate}</div>}
                                                     </div>
                                                     <Badge color={getTripStatus(trip).color}>{getTripStatus(trip).label}</Badge>
                                                 </div>
