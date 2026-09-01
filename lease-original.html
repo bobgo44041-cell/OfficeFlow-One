@@ -174,6 +174,27 @@
         // 월 고정비 = 월 임차료 + 관리비
         const monthlyOutgo = (lease) => num(lease.monthlyRent) + num(lease.maintenanceFee);
 
+        // 따옴표와 줄바꿈이 들어간 셀까지 처리하는 CSV 파서
+        const parseCSV = (text) => {
+            const clean = String(text).replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+            const rows = [];
+            let row = [], cell = '', inQuotes = false;
+            for (let i = 0; i < clean.length; i++) {
+                const ch = clean[i];
+                if (inQuotes) {
+                    if (ch === '"') {
+                        if (clean[i + 1] === '"') { cell += '"'; i++; }
+                        else inQuotes = false;
+                    } else cell += ch;
+                } else if (ch === '"') inQuotes = true;
+                else if (ch === ',') { row.push(cell); cell = ''; }
+                else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+                else cell += ch;
+            }
+            if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+            return rows.filter(r => r.some(c => String(c).trim() !== ''));
+        };
+
         const downloadCSV = (rows, filename) => {
             const csv = rows.map(r => r.map(c => {
                 const v = String(c === undefined || c === null ? '' : c);
@@ -522,8 +543,8 @@
         }
 
         // --- 계약 관리 ---
-        function LeaseManagement({ leases, onAdd, onUpdate, onDelete, onRenew }) {
-            const [form, setForm] = useState({ ...EMPTY_LEASE_FORM });
+        function LeaseManagement({ leases, onAdd, onUpdate, onDelete, onRenew, defaultNoticeDays }) {
+            const [form, setForm] = useState({ ...EMPTY_LEASE_FORM, noticeDays: defaultNoticeDays });
             const [editId, setEditId] = useState(null);
             const [search, setSearch] = useState('');
             const formRef = useRef(null);
@@ -535,7 +556,12 @@
                 return rows.filter(l => [l.name, l.address, l.lessorName, l.manager, l.usage].join(' ').toLowerCase().includes(q));
             }, [leases, search]);
 
-            const reset = () => { setForm({ ...EMPTY_LEASE_FORM }); setEditId(null); };
+            const reset = () => { setForm({ ...EMPTY_LEASE_FORM, noticeDays: defaultNoticeDays }); setEditId(null); };
+
+            // 설정에서 기본 통보 기한을 바꾸면, 편집 중이 아닌 빈 폼에 즉시 반영한다.
+            useEffect(() => {
+                if (!editId) setForm(prev => (prev.name ? prev : { ...prev, noticeDays: defaultNoticeDays }));
+            }, [defaultNoticeDays, editId]);
 
             const handleSubmit = (e) => {
                 e.preventDefault();
@@ -1229,11 +1255,95 @@
         }
 
         // --- 환경설정 ---
-        function SettingsPage({ isDemoMode }) {
+        function SettingsPage({ isDemoMode, defaultNoticeDays, onSaveNoticeDays, onImportCsv }) {
+            const [noticeInput, setNoticeInput] = useState(String(defaultNoticeDays));
+            const [savingNotice, setSavingNotice] = useState(false);
+            const [file, setFile] = useState(null);
+            const [preview, setPreview] = useState(null);
+            const [importing, setImporting] = useState(false);
+            const [fileKey, setFileKey] = useState(0);
+
+            useEffect(() => { setNoticeInput(String(defaultNoticeDays)); }, [defaultNoticeDays]);
+
+            const handleFile = (e) => {
+                const f = e.target.files[0];
+                setFile(f || null);
+                setPreview(null);
+                if (!f) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                    try {
+                        const rows = parseCSV(reader.result);
+                        if (rows.length < 2) throw new Error('데이터 행이 없습니다.');
+                        const headers = rows[0].map(h => String(h).trim());
+                        if (headers.indexOf('물건명') < 0) throw new Error("CSV 헤더에 '물건명' 컬럼이 필요합니다.");
+                        const nameIdx = headers.indexOf('물건명');
+                        const body = rows.slice(1);
+                        const samples = body.map(r => String(r[nameIdx] || '').trim()).filter(Boolean);
+                        setPreview({ rows, count: samples.length, samples: samples.slice(0, 8) });
+                    } catch (err) {
+                        setPreview({ error: err.message });
+                    }
+                };
+                reader.readAsText(f, 'utf-8');
+            };
+
+            const runImport = async () => {
+                if (!preview || preview.error || !preview.count) return;
+                if (!confirm(`계약 ${preview.count}건을 추가합니다. 기존 데이터는 지워지지 않고 함께 남습니다.\n계속하시겠습니까?`)) return;
+                setImporting(true);
+                const added = await onImportCsv(preview.rows);
+                setImporting(false);
+                setFile(null); setPreview(null); setFileKey(k => k + 1);
+                alert(`${added}건을 복원했습니다.`);
+            };
+
             return (
                 <div className="space-y-6 animate-fade-in">
                     <h2 className="text-2xl font-bold text-gray-800">환경설정</h2>
-                    <div className="glass-panel p-8 max-w-xl">
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="glass-panel p-6 h-fit">
+                            <h3 className="text-lg font-semibold mb-1 flex items-center gap-2"><Icons.Calendar /> 기본 갱신 통보 기한</h3>
+                            <p className="text-xs text-gray-500 mb-4">신규 계약을 등록할 때 자동으로 채워지는 값입니다. 계약마다 따로 바꿀 수 있습니다.</p>
+                            <div className="flex gap-2">
+                                <input type="number" min="0" className="flex-1 border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                    value={noticeInput} onChange={e => setNoticeInput(e.target.value)} />
+                                <button type="button" disabled={savingNotice}
+                                    onClick={async () => {
+                                        setSavingNotice(true);
+                                        const ok = await onSaveNoticeDays(noticeInput);
+                                        setSavingNotice(false);
+                                        alert(ok ? '저장했습니다.' : '0 이상의 숫자를 입력하세요.');
+                                    }}
+                                    className="bg-slate-800 text-white px-4 rounded text-sm font-bold hover:bg-slate-700 disabled:opacity-50">
+                                    {savingNotice ? '저장중' : '저장'}
+                                </button>
+                            </div>
+                            <p className="text-[11px] text-gray-400 mt-2">상가건물임대차보호법상 갱신요구는 만료 6개월~1개월 전에 해야 합니다.</p>
+                        </div>
+
+                        <div className="glass-panel p-6 h-fit">
+                            <h3 className="text-lg font-semibold mb-1 flex items-center gap-2"><Icons.Download /> CSV 복원</h3>
+                            <p className="text-xs text-gray-500 mb-4">계약 관리에서 내려받은 CSV 를 다시 불러옵니다. 기존 계약은 지워지지 않고 뒤에 추가됩니다.</p>
+                            <input key={fileKey} type="file" accept=".csv,text/csv" onChange={handleFile}
+                                className="w-full text-xs border rounded p-2 bg-white" />
+                            {preview && preview.error && <p className="text-xs text-red-500 mt-2">{preview.error}</p>}
+                            {preview && !preview.error && (
+                                <div className="mt-3 border rounded p-3 bg-slate-50 text-xs text-slate-600">
+                                    <p className="font-bold text-slate-700">{preview.count}건 확인</p>
+                                    <p className="mt-1 text-[11px] text-slate-500">{preview.samples.join(', ')}{preview.count > preview.samples.length ? ' 외' : ''}</p>
+                                </div>
+                            )}
+                            <button type="button" disabled={!preview || preview.error || importing}
+                                onClick={runImport}
+                                className="w-full mt-3 bg-emerald-600 text-white py-2 rounded font-bold text-sm hover:bg-emerald-700 disabled:opacity-40">
+                                {importing ? '복원 중...' : 'CSV 복원 실행'}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="glass-panel p-6 max-w-xl">
                         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><Icons.Settings /> 클라우드 연결</h3>
                         <div className="border rounded p-3 bg-slate-50 text-xs text-slate-600 space-y-1">
                             <p className="flex justify-between"><span className="text-slate-400">프로젝트</span><span className="font-mono">{window.userFirebaseConfig?.projectId || '-'}</span></p>
@@ -1254,6 +1364,7 @@
             const [activeTab, setActiveTab] = useState('dashboard');
             const [leases, setLeases] = useState([]);
             const [auditLogs, setAuditLogs] = useState([]);
+            const [settingsDocs, setSettingsDocs] = useState([]);
             const [renewTarget, setRenewTarget] = useState(null);
             const [loading, setLoading] = useState(true);
             const [isDemoMode, setIsDemoMode] = useState(false);
@@ -1270,8 +1381,33 @@
                     (snap) => setAuditLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
                     () => {}
                 );
-                return () => { unsub(); unsubLogs(); };
+                const unsubSettings = onSnapshot(leaseCollection(services.db, 'settings'),
+                    (snap) => setSettingsDocs(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+                    () => {}
+                );
+                return () => { unsub(); unsubLogs(); unsubSettings(); };
             }, [services, user, isDemoMode]);
+
+            // settings/general 에 저장된 기본 갱신 통보 기한. 없으면 폼 기본값.
+            const defaultNoticeDays = useMemo(() => {
+                const general = settingsDocs.find(d => d.id === 'general');
+                const v = parseInt(general && general.defaultNoticeDays);
+                return Number.isNaN(v) || v < 0 ? EMPTY_LEASE_FORM.noticeDays : v;
+            }, [settingsDocs]);
+
+            const handleSaveNoticeDays = async (value) => {
+                const v = parseInt(value);
+                if (Number.isNaN(v) || v < 0) return false;
+                if (isDemoMode) {
+                    setSettingsDocs(prev => [...prev.filter(d => d.id !== 'general'), { id: 'general', defaultNoticeDays: v }]);
+                    return true;
+                }
+                try {
+                    const { setDoc, leaseDoc } = window.firebaseModules;
+                    await setDoc(leaseDoc(services.db, 'settings', 'general'), { defaultNoticeDays: v, updatedAt: new Date().toISOString() });
+                    return true;
+                } catch (e) { console.warn('notice days save failed', e); return false; }
+            };
 
             const addAuditLog = async (action, message, before, after) => {
                 const log = { action, message, before: before || null, after: after || null, createdAt: new Date().toISOString() };
@@ -1380,6 +1516,51 @@
                 setRenewTarget(null);
             };
 
+            // 계약 관리에서 내려받은 CSV 를 되돌린다. 계산 컬럼(평/월고정비/통보마감일)은 무시한다.
+            const handleImportCsv = async (rows) => {
+                const headers = rows[0].map(h => String(h).trim());
+                const at = (label) => headers.indexOf(label);
+                const cell = (row, idx) => (idx >= 0 ? String(row[idx] || '').trim() : '');
+                const idx = {
+                    name: at('물건명'), address: at('주소'), usage: at('용도'), area: at('계약면적(㎡)'),
+                    lessorName: at('임대인'), lessorContact: at('임대인연락처'),
+                    startDate: at('시작일'), endDate: at('종료일'),
+                    deposit: at('보증금'), monthlyRent: at('월임차료'), maintenanceFee: at('관리비'),
+                    noticeDays: at('통보기한(일)'), renewalStatus: at('갱신상태'),
+                    manager: at('담당자'), docLink: at('문서링크'), memo: at('비고'),
+                };
+                let imported = 0;
+                for (const row of rows.slice(1)) {
+                    const name = cell(row, idx.name);
+                    if (!name) continue;
+                    const usage = cell(row, idx.usage);
+                    const statusLabel = cell(row, idx.renewalStatus);
+                    const matched = RENEWAL_STATUSES.find(st => st.label === statusLabel);
+                    const notice = parseInt(cell(row, idx.noticeDays).replace(/,/g, ''));
+                    await handleAdd({
+                        ...EMPTY_LEASE_FORM,
+                        name,
+                        address: cell(row, idx.address),
+                        usage: LEASE_USAGES.includes(usage) ? usage : '기타',
+                        area: Number(cell(row, idx.area).replace(/,/g, '')) || 0,
+                        lessorName: cell(row, idx.lessorName),
+                        lessorContact: cell(row, idx.lessorContact),
+                        startDate: cell(row, idx.startDate),
+                        endDate: cell(row, idx.endDate),
+                        deposit: num(cell(row, idx.deposit)),
+                        monthlyRent: num(cell(row, idx.monthlyRent)),
+                        maintenanceFee: num(cell(row, idx.maintenanceFee)),
+                        noticeDays: Number.isNaN(notice) ? defaultNoticeDays : notice,
+                        renewalStatus: matched ? matched.value : 'review',
+                        manager: cell(row, idx.manager),
+                        docLink: cell(row, idx.docLink),
+                        memo: cell(row, idx.memo),
+                    });
+                    imported++;
+                }
+                return imported;
+            };
+
             const handleDownloadOpsReport = () => {
                 const today = new Date().toISOString().slice(0, 10);
                 const deposit = leases.reduce((a, l) => a + num(l.deposit), 0);
@@ -1451,11 +1632,11 @@
                                     {activeTab === 'dashboard' && <DashboardPage leases={leases} onDownloadReport={handleDownloadOpsReport} />}
                                     {activeTab === 'renewals' && <RenewalSchedulePage leases={leases} />}
                                     {activeTab === 'analysis' && <AnalysisPage leases={leases} />}
-                                    {activeTab === 'leases' && <LeaseManagement leases={leases} onAdd={handleAdd} onUpdate={handleUpdate} onDelete={handleDelete} onRenew={setRenewTarget} />}
+                                    {activeTab === 'leases' && <LeaseManagement leases={leases} onAdd={handleAdd} onUpdate={handleUpdate} onDelete={handleDelete} onRenew={setRenewTarget} defaultNoticeDays={defaultNoticeDays} />}
                                     {activeTab === 'lessors' && <LessorPage leases={leases} />}
                                     {activeTab === 'history' && <HistoryPage leases={leases} />}
                                     {activeTab === 'audit' && <AuditLogPage auditLogs={auditLogs} />}
-                                    {activeTab === 'settings' && <SettingsPage isDemoMode={isDemoMode} />}
+                                    {activeTab === 'settings' && <SettingsPage isDemoMode={isDemoMode} defaultNoticeDays={defaultNoticeDays} onSaveNoticeDays={handleSaveNoticeDays} onImportCsv={handleImportCsv} />}
                                 </div>
                             )}
                         </main>
