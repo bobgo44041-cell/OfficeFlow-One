@@ -783,7 +783,10 @@
             const [form, setForm] = useState({ ...EMPTY_LEASE_FORM, noticeDays: defaultNoticeDays });
             const [editId, setEditId] = useState(null);
             const [search, setSearch] = useState('');
+            const [page, setPage] = useState(1);
+            const [pageSize, setPageSize] = useState(10);
             const formRef = useRef(null);
+            const listRef = useRef(null);
 
             const filtered = useMemo(() => {
                 const q = search.trim().toLowerCase();
@@ -791,6 +794,21 @@
                 if (!q) return rows;
                 return rows.filter(l => [l.name, l.address, l.lessorName, l.manager, l.usage].join(' ').toLowerCase().includes(q));
             }, [leases, search]);
+
+            const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+            const safePage = Math.min(page, totalPages);
+            const startIndex = (safePage - 1) * pageSize;
+            const pageRows = filtered.slice(startIndex, startIndex + pageSize);
+
+            // 검색어나 페이지 크기가 바뀌면 첫 장으로 돌아간다.
+            useEffect(() => { setPage(1); }, [search, pageSize]);
+            // 삭제 등으로 마지막 장이 비면 존재하는 장으로 당긴다.
+            useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+
+            const goPage = (next) => {
+                setPage(Math.min(Math.max(1, next), totalPages));
+                listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
 
             const reset = () => { setForm({ ...EMPTY_LEASE_FORM, noticeDays: defaultNoticeDays }); setEditId(null); };
 
@@ -912,18 +930,31 @@
                             </form>
                         </div>
 
-                        <div className="flex-1 space-y-3 min-w-0">
-                            <div className="relative">
-                                <input type="text" placeholder="물건명, 주소, 임대인, 담당자 검색..." value={search} onChange={e => setSearch(e.target.value)}
-                                    className="w-full pl-8 pr-3 py-2 text-sm border rounded bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
-                                <span className="absolute left-2.5 top-2.5 text-gray-400"><Icons.Search /></span>
+                        <div ref={listRef} className="flex-1 space-y-3 min-w-0">
+                            <div className="flex flex-col sm:flex-row gap-2">
+                                <div className="relative flex-1">
+                                    <input type="text" placeholder="물건명, 주소, 임대인, 담당자 검색..." value={search} onChange={e => setSearch(e.target.value)}
+                                        className="w-full pl-8 pr-3 py-2 text-sm border rounded bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                                    <span className="absolute left-2.5 top-2.5 text-gray-400"><Icons.Search /></span>
+                                </div>
+                                <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
+                                    className="border rounded px-3 py-2 text-sm bg-white sm:w-32">
+                                    {[10, 20, 50].map(n => <option key={n} value={n}>{n}개씩</option>)}
+                                </select>
                             </div>
+
+                            {filtered.length > 0 && (
+                                <p className="text-xs text-gray-500">
+                                    총 {filtered.length}건 중 {startIndex + 1}~{Math.min(startIndex + pageSize, filtered.length)}건
+                                    {search && <span className="text-gray-400"> · 검색: {search}</span>}
+                                </p>
+                            )}
 
                             {filtered.length === 0 ? (
                                 <div className="glass-panel p-12 text-center text-gray-400 text-sm">
                                     {leases.length === 0 ? '등록된 계약이 없습니다. 왼쪽 양식으로 첫 계약을 추가하세요.' : '검색 결과가 없습니다.'}
                                 </div>
-                            ) : filtered.map(l => {
+                            ) : pageRows.map(l => {
                                 const status = getRenewalStatus(l.renewalStatus);
                                 const notice = getNoticeDeadline(l);
                                 const dDay = diffDaysFromToday(getActionDate(l));
@@ -972,6 +1003,34 @@
                                     </div>
                                 );
                             })}
+
+                            {totalPages > 1 && (
+                                <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                                    <span className="text-xs text-gray-500">{safePage} / {totalPages} 페이지</span>
+                                    <div className="flex items-center gap-1">
+                                        <button type="button" onClick={() => goPage(safePage - 1)} disabled={safePage <= 1}
+                                            className="px-3 py-1.5 rounded border text-xs font-bold bg-white text-slate-600 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white">
+                                            이전
+                                        </button>
+                                        {Array.from({ length: totalPages }, (_, i) => i + 1)
+                                            // 페이지가 많아지면 현재 위치 주변과 양 끝만 보여준다.
+                                            .filter(n => n === 1 || n === totalPages || Math.abs(n - safePage) <= 1)
+                                            .map((n, i, arr) => (
+                                                <React.Fragment key={n}>
+                                                    {i > 0 && n - arr[i - 1] > 1 && <span className="px-1 text-xs text-gray-300">…</span>}
+                                                    <button type="button" onClick={() => goPage(n)}
+                                                        className={`w-8 py-1.5 rounded text-xs font-bold ${n === safePage ? 'bg-blue-600 text-white' : 'border bg-white text-slate-600 hover:bg-gray-50'}`}>
+                                                        {n}
+                                                    </button>
+                                                </React.Fragment>
+                                            ))}
+                                        <button type="button" onClick={() => goPage(safePage + 1)} disabled={safePage >= totalPages}
+                                            className="px-3 py-1.5 rounded border text-xs font-bold bg-white text-slate-600 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white">
+                                            다음
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
