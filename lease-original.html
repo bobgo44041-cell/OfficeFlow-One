@@ -199,24 +199,109 @@
             Search: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>,
             XMark: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>,
             CloudOff: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3l18 18M18.364 5.636A9 9 0 015.636 18.364M12 6a6 6 0 016 6" /></svg>,
+            Chart: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>,
+            Users: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>,
+            History: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>,
+            Refresh: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>,
             Coin: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>,
         };
 
         // --- 내비게이션 정의 (사이드바와 모바일 하단바가 공유) ---
         const NAV_GROUPS = [
             { title: '운영', items: [
-                { id: 'dashboard', label: '대시보드',   short: '홈',   Icon: Icons.Dashboard },
-                { id: 'renewals',  label: '갱신 일정',  short: '갱신', Icon: Icons.Calendar },
+                { id: 'dashboard', label: '대시보드',        short: '홈',   Icon: Icons.Dashboard },
+                { id: 'renewals',  label: '갱신 일정',       short: '갱신', Icon: Icons.Calendar },
+                { id: 'analysis',  label: '비용·보증금 분석', short: '분석', Icon: Icons.Chart },
             ]},
             { title: '계약', items: [
-                { id: 'leases', label: '계약 관리', short: '계약', Icon: Icons.Building },
+                { id: 'leases',  label: '계약 관리',   short: '계약',   Icon: Icons.Building },
+                { id: 'lessors', label: '임대인 관리', short: '임대인', Icon: Icons.Users },
+                { id: 'history', label: '재계약 이력', short: '이력',   Icon: Icons.Refresh },
             ]},
             { title: '관리', items: [
-                { id: 'settings', label: '환경설정', short: '설정', Icon: Icons.Settings },
+                { id: 'audit',    label: '감사 로그', short: '로그', Icon: Icons.History },
+                { id: 'settings', label: '환경설정',  short: '설정', Icon: Icons.Settings },
             ]},
         ];
 
         const NAV_ITEMS = NAV_GROUPS.flatMap(g => g.items);
+
+        // --- 분석/이력 계산 ---
+        const toPyeong = (sqm) => (Number(sqm) || 0) / SQM_PER_PYEONG;
+
+        // 평당 월 임차료. 임대차 시세 비교의 기준 지표다.
+        const rentPerPyeong = (lease) => {
+            const p = toPyeong(lease.area);
+            return p > 0 ? Math.round(num(lease.monthlyRent) / p) : 0;
+        };
+        const outgoPerPyeong = (lease) => {
+            const p = toPyeong(lease.area);
+            return p > 0 ? Math.round(monthlyOutgo(lease) / p) : 0;
+        };
+        // 보증금이 월 임차료의 몇 개월치인지
+        const depositMonths = (lease) => {
+            const rent = num(lease.monthlyRent);
+            return rent > 0 ? (num(lease.deposit) / rent) : 0;
+        };
+
+        const getHistory = (lease) => (Array.isArray(lease.history) ? lease.history : []);
+
+        // 과거 계약 + 현재 계약을 시작일 순으로 이어 붙인다.
+        const buildTermline = (lease) => {
+            const terms = [
+                ...getHistory(lease).map(h => ({ ...h, current: false })),
+                { startDate: lease.startDate, endDate: lease.endDate, deposit: lease.deposit,
+                  monthlyRent: lease.monthlyRent, maintenanceFee: lease.maintenanceFee, area: lease.area, current: true },
+            ].filter(t => t.startDate || t.endDate);
+            terms.sort((a, b) => String(a.startDate || '').localeCompare(String(b.startDate || '')));
+            return terms.map((t, i) => {
+                const prev = terms[i - 1];
+                const prevRent = prev ? num(prev.monthlyRent) : 0;
+                const rent = num(t.monthlyRent);
+                const rate = prev && prevRent > 0 ? ((rent - prevRent) / prevRent) * 100 : null;
+                const depositDiff = prev ? num(t.deposit) - num(prev.deposit) : null;
+                return { ...t, rentChangeRate: rate, depositDiff };
+            });
+        };
+
+        // --- 감사 로그 ---
+        const AUDIT_FIELD_LABELS = {
+            name: '물건명', address: '주소', usage: '용도', area: '계약면적',
+            lessorName: '임대인', lessorContact: '임대인 연락처',
+            startDate: '시작일', endDate: '종료일',
+            deposit: '보증금', monthlyRent: '월 임차료', maintenanceFee: '월 관리비',
+            noticeDays: '통보기한', renewalStatus: '갱신상태',
+            manager: '담당자', docLink: '문서링크', memo: '비고',
+        };
+
+        const AUDIT_ACTIONS = {
+            add:    { label: '등록',   cls: 'bg-blue-100 text-blue-700' },
+            update: { label: '수정',   cls: 'bg-amber-100 text-amber-700' },
+            renew:  { label: '갱신처리', cls: 'bg-emerald-100 text-emerald-700' },
+            del:    { label: '삭제',   cls: 'bg-red-100 text-red-700' },
+        };
+
+        const snapshotForAudit = (lease) => {
+            if (!lease) return null;
+            const out = {};
+            Object.keys(AUDIT_FIELD_LABELS).forEach(k => { out[k] = lease[k] === undefined ? '' : lease[k]; });
+            return out;
+        };
+
+        const formatAuditValue = (key, value) => {
+            if (value === undefined || value === null || value === '') return '없음';
+            if (key === 'renewalStatus') return (getRenewalStatus(value) || {}).label || String(value);
+            if (['deposit', 'monthlyRent', 'maintenanceFee', 'noticeDays', 'area'].includes(key)) return Number(value).toLocaleString();
+            return String(value);
+        };
+
+        // before/after 에서 실제로 바뀐 필드만 뽑는다.
+        const diffAuditSnapshots = (before, after) => {
+            if (!before || !after) return [];
+            return Object.keys(AUDIT_FIELD_LABELS)
+                .filter(k => String(before[k] ?? '') !== String(after[k] ?? ''))
+                .map(k => ({ key: k, label: AUDIT_FIELD_LABELS[k], from: formatAuditValue(k, before[k]), to: formatAuditValue(k, after[k]) }));
+        };
 
         // --- 공통 UI ---
         function NavButton({ active, onClick, icon, label }) {
@@ -437,7 +522,7 @@
         }
 
         // --- 계약 관리 ---
-        function LeaseManagement({ leases, onAdd, onUpdate, onDelete }) {
+        function LeaseManagement({ leases, onAdd, onUpdate, onDelete, onRenew }) {
             const [form, setForm] = useState({ ...EMPTY_LEASE_FORM });
             const [editId, setEditId] = useState(null);
             const [search, setSearch] = useState('');
@@ -593,7 +678,11 @@
                                                 </div>
                                                 {l.address && <p className="text-xs text-gray-500 mt-1">{l.address}</p>}
                                             </div>
-                                            <div className="flex gap-3 shrink-0">
+                                            <div className="flex items-center gap-3 shrink-0">
+                                                <button onClick={() => onRenew(l)} title="갱신 처리"
+                                                    className="flex items-center gap-1 text-xs font-bold text-emerald-600 border border-emerald-200 bg-emerald-50 px-2.5 py-1 rounded hover:bg-emerald-100">
+                                                    <Icons.Refresh /> 갱신 처리
+                                                </button>
                                                 <button onClick={() => startEdit(l)} className="text-blue-400 hover:text-blue-600"><Icons.Edit /></button>
                                                 <button onClick={() => onDelete(l.id)} className="text-red-300 hover:text-red-500"><Icons.Trash /></button>
                                             </div>
@@ -614,6 +703,9 @@
                                                     <a href={l.docLink} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-xs break-all">링크 열기</a></div>
                                             )}
                                         </div>
+                                        {getHistory(l).length > 0 && (
+                                            <p className="mt-3 pt-3 border-t text-[11px] text-gray-400">재계약 이력 {getHistory(l).length}건 · 이력 메뉴에서 인상률을 볼 수 있습니다.</p>
+                                        )}
                                         {l.memo && <p className="mt-3 pt-3 border-t text-xs text-gray-500 whitespace-pre-wrap">{l.memo}</p>}
                                     </div>
                                 );
@@ -766,6 +858,376 @@
             );
         }
 
+        // --- 갱신 처리 모달 ---
+        // 현재 조건을 이력으로 넘기고 새 조건을 입력받는다.
+        function RenewModal({ lease, onClose, onSubmit }) {
+            const [form, setForm] = useState({
+                startDate: lease.endDate || '',
+                endDate: '',
+                deposit: lease.deposit || 0,
+                monthlyRent: lease.monthlyRent || 0,
+                maintenanceFee: lease.maintenanceFee || 0,
+            });
+
+            const prevRent = num(lease.monthlyRent);
+            const rate = prevRent > 0 ? ((num(form.monthlyRent) - prevRent) / prevRent) * 100 : null;
+
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in" onClick={onClose}>
+                    <div className="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+                            <h3 className="font-bold text-gray-800">{lease.name} 갱신 처리</h3>
+                            <button onClick={onClose} className="hover:bg-gray-200 p-1 rounded"><Icons.XMark /></button>
+                        </div>
+                        <form className="p-5 space-y-3" onSubmit={(e) => { e.preventDefault(); onSubmit(form); }}>
+                            <div className="bg-slate-50 border rounded p-3 text-xs text-slate-600">
+                                <p className="font-bold text-slate-700 mb-1">현재 조건 (이력으로 이동)</p>
+                                <p>{lease.startDate || '-'} ~ {lease.endDate || '-'}</p>
+                                <p>임차료 {formatKrw(lease.monthlyRent)} · 관리비 {formatKrw(lease.maintenanceFee)} · 보증금 {formatKrw(lease.deposit)}</p>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                                <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">새 시작일</label>
+                                    <input type="date" required className="w-full border rounded px-3 py-2 text-sm" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })} /></div>
+                                <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">새 종료일</label>
+                                    <input type="date" required className="w-full border rounded px-3 py-2 text-sm" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })} /></div>
+                            </div>
+                            {form.startDate && form.endDate && form.startDate > form.endDate && (
+                                <p className="text-[10px] text-red-500 ml-1">시작일이 종료일보다 늦습니다.</p>
+                            )}
+
+                            <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">보증금 (원)</label>
+                                <input type="number" min="0" className="w-full border rounded px-3 py-2 text-sm" value={form.deposit} onChange={e => setForm({ ...form, deposit: parseInt(e.target.value) || 0 })} /></div>
+                            <div className="grid grid-cols-2 gap-2">
+                                <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">월 임차료 (원)</label>
+                                    <input type="number" min="0" className="w-full border rounded px-3 py-2 text-sm" value={form.monthlyRent} onChange={e => setForm({ ...form, monthlyRent: parseInt(e.target.value) || 0 })} /></div>
+                                <div><label className="text-[10px] text-gray-400 ml-1 block mb-1">월 관리비 (원)</label>
+                                    <input type="number" min="0" className="w-full border rounded px-3 py-2 text-sm" value={form.maintenanceFee} onChange={e => setForm({ ...form, maintenanceFee: parseInt(e.target.value) || 0 })} /></div>
+                            </div>
+                            {rate !== null && (
+                                <p className={`text-xs font-bold ml-1 ${rate > 0 ? 'text-red-600' : rate < 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
+                                    임차료 {rate > 0 ? '+' : ''}{rate.toFixed(1)}% ({formatKrw(lease.monthlyRent)} → {formatKrw(form.monthlyRent)})
+                                </p>
+                            )}
+
+                            <div className="flex justify-end gap-2 pt-2">
+                                <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-500">취소</button>
+                                <button type="submit" className="bg-emerald-600 text-white px-5 py-2 rounded font-bold text-sm hover:bg-emerald-700">갱신 처리</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 비용·보증금 분석 ---
+        function AnalysisPage({ leases }) {
+            const [basis, setBasis] = useState('rent'); // rent | outgo
+
+            const rows = useMemo(() => leases
+                .map(l => ({
+                    ...l,
+                    pyeong: toPyeong(l.area),
+                    unit: basis === 'rent' ? rentPerPyeong(l) : outgoPerPyeong(l),
+                    months: depositMonths(l),
+                }))
+                .sort((a, b) => b.unit - a.unit), [leases, basis]);
+
+            const priced = rows.filter(r => r.unit > 0);
+            const avgUnit = priced.length ? Math.round(priced.reduce((a, r) => a + r.unit, 0) / priced.length) : 0;
+            const totalDeposit = leases.reduce((a, l) => a + num(l.deposit), 0);
+            const totalMonthly = leases.reduce((a, l) => a + monthlyOutgo(l), 0);
+            const maxUnit = priced.length ? priced[0].unit : 0;
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <div>
+                            <h2 className="text-2xl font-bold text-gray-800">비용·보증금 분석</h2>
+                            <p className="text-sm text-gray-500 mt-1">평당 단가로 물건 간 비용을 비교합니다.</p>
+                        </div>
+                        <div className="flex gap-1">
+                            {[['rent', '임차료 기준'], ['outgo', '고정비 기준']].map(([v, label]) => (
+                                <button key={v} onClick={() => setBasis(v)}
+                                    className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${basis === v ? 'bg-slate-800 text-white' : 'bg-white border text-slate-600 hover:bg-gray-50'}`}>
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <StatCard title="평균 평당 단가" value={`₩${avgUnit.toLocaleString()}`} subtext={basis === 'rent' ? '월 임차료 ÷ 평' : '월 고정비 ÷ 평'} color="blue" />
+                        <StatCard title="연간 고정비" value={`₩${(totalMonthly * 12).toLocaleString()}`} subtext="임차료 + 관리비 × 12" color="emerald" />
+                        <StatCard title="예치 보증금" value={`₩${totalDeposit.toLocaleString()}`} subtext={`월 임차료의 약 ${totalMonthly > 0 ? (totalDeposit / Math.max(1, leases.reduce((a, l) => a + num(l.monthlyRent), 0))).toFixed(1) : '0'}개월치`} color="indigo" />
+                    </div>
+
+                    <div className="glass-panel p-6">
+                        <h3 className="font-bold text-gray-700 mb-4">평당 단가 순위</h3>
+                        {priced.length === 0 ? (
+                            <p className="text-sm text-gray-400 py-8 text-center">면적과 임차료가 입력된 계약이 없습니다.</p>
+                        ) : (
+                            <div className="space-y-4">
+                                {priced.map(l => {
+                                    const pct = maxUnit > 0 ? Math.round((l.unit / maxUnit) * 100) : 0;
+                                    const vsAvg = avgUnit > 0 ? Math.round(((l.unit - avgUnit) / avgUnit) * 100) : 0;
+                                    return (
+                                        <div key={l.id}>
+                                            <div className="flex flex-wrap justify-between items-baseline gap-2 text-sm mb-1">
+                                                <span className="font-medium text-gray-800">{l.name}
+                                                    <span className="ml-2 text-[10px] text-gray-400">{l.pyeong.toFixed(1)}평 · {l.usage}</span>
+                                                </span>
+                                                <span className="text-gray-700">
+                                                    평당 <span className="font-bold">{l.unit.toLocaleString()}원</span>
+                                                    <span className={`ml-2 text-[11px] font-bold ${vsAvg > 0 ? 'text-red-600' : vsAvg < 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
+                                                        평균 대비 {vsAvg > 0 ? '+' : ''}{vsAvg}%
+                                                    </span>
+                                                </span>
+                                            </div>
+                                            <div className="h-2 bg-gray-100 rounded"><div className={`h-2 rounded ${vsAvg > 0 ? 'bg-red-400' : 'bg-blue-500'}`} style={{ width: pct + '%' }}></div></div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="glass-panel overflow-x-auto custom-scroll">
+                        <div className="px-6 pt-6 pb-3"><h3 className="font-bold text-gray-700">보증금 예치 현황</h3></div>
+                        <table className="w-full min-w-[640px] text-sm">
+                            <thead className="bg-gray-50 border-y text-xs uppercase text-gray-500">
+                                <tr>
+                                    <th className="px-6 py-3 text-left">물건명</th>
+                                    <th className="px-4 py-3 text-right">보증금</th>
+                                    <th className="px-4 py-3 text-right">월 임차료</th>
+                                    <th className="px-4 py-3 text-right">보증금/월세</th>
+                                    <th className="px-6 py-3 text-right">비중</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y">
+                                {leases.length === 0 ? (
+                                    <tr><td colSpan="5" className="px-6 py-10 text-center text-gray-400">등록된 계약이 없습니다.</td></tr>
+                                ) : [...leases].sort((a, b) => num(b.deposit) - num(a.deposit)).map(l => (
+                                    <tr key={l.id} className="hover:bg-gray-50">
+                                        <td className="px-6 py-3 font-medium text-gray-800">{l.name}</td>
+                                        <td className="px-4 py-3 text-right">{formatKrw(l.deposit)}</td>
+                                        <td className="px-4 py-3 text-right text-gray-500">{formatKrw(l.monthlyRent)}</td>
+                                        <td className="px-4 py-3 text-right text-gray-500">{depositMonths(l) > 0 ? depositMonths(l).toFixed(1) + '개월' : '-'}</td>
+                                        <td className="px-6 py-3 text-right font-bold text-gray-700">{totalDeposit > 0 ? Math.round((num(l.deposit) / totalDeposit) * 100) : 0}%</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 임대인 관리 ---
+        function LessorPage({ leases }) {
+            const groups = useMemo(() => {
+                const map = new Map();
+                leases.forEach(l => {
+                    const key = (l.lessorName || '').trim() || '(임대인 미입력)';
+                    if (!map.has(key)) map.set(key, { name: key, contact: '', items: [] });
+                    const g = map.get(key);
+                    if (!g.contact && l.lessorContact) g.contact = l.lessorContact;
+                    g.items.push(l);
+                });
+                return [...map.values()]
+                    .map(g => ({
+                        ...g,
+                        deposit: g.items.reduce((a, l) => a + num(l.deposit), 0),
+                        monthly: g.items.reduce((a, l) => a + monthlyOutgo(l), 0),
+                        nextAction: g.items
+                            .map(l => ({ name: l.name, date: getActionDate(l), dDay: diffDaysFromToday(getActionDate(l)) }))
+                            .filter(x => x.dDay !== null)
+                            .sort((a, b) => a.dDay - b.dDay)[0] || null,
+                    }))
+                    .sort((a, b) => b.monthly - a.monthly);
+            }, [leases]);
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div>
+                        <h2 className="text-2xl font-bold text-gray-800">임대인 관리</h2>
+                        <p className="text-sm text-gray-500 mt-1">임대인 기준으로 계약을 묶어 봅니다. 같은 임대인과 여러 건을 계약했다면 협상 단위가 됩니다.</p>
+                    </div>
+
+                    {groups.length === 0 ? (
+                        <div className="glass-panel p-12 text-center text-gray-400 text-sm">등록된 계약이 없습니다.</div>
+                    ) : groups.map(g => (
+                        <div key={g.name} className="glass-panel p-5">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <h4 className="font-bold text-gray-900">{g.name}</h4>
+                                    {g.contact && <p className="text-xs text-gray-400 mt-0.5">{g.contact}</p>}
+                                </div>
+                                <div className="flex flex-wrap gap-4 text-sm">
+                                    <div className="text-right"><p className="text-[10px] text-gray-400">계약</p><p className="font-bold text-gray-800">{g.items.length}건</p></div>
+                                    <div className="text-right"><p className="text-[10px] text-gray-400">보증금</p><p className="font-bold text-gray-800">{formatKrw(g.deposit)}</p></div>
+                                    <div className="text-right"><p className="text-[10px] text-gray-400">월 고정비</p><p className="font-bold text-gray-900">{formatKrw(g.monthly)}</p></div>
+                                </div>
+                            </div>
+                            {g.nextAction && (
+                                <p className="mt-3 text-xs text-amber-700">
+                                    가장 이른 대응 기한 · {g.nextAction.name} {g.nextAction.date}
+                                    <span className="ml-2 font-bold">{g.nextAction.dDay >= 0 ? `D-${g.nextAction.dDay}` : `${Math.abs(g.nextAction.dDay)}일 경과`}</span>
+                                </p>
+                            )}
+                            <div className="mt-3 pt-3 border-t flex flex-wrap gap-2">
+                                {g.items.map(l => (
+                                    <span key={l.id} className="px-2.5 py-1 rounded border text-xs text-gray-600">
+                                        {l.name} <span className="text-gray-400 ml-1">{formatKrw(monthlyOutgo(l))}</span>
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+
+        // --- 재계약 이력 ---
+        function HistoryPage({ leases }) {
+            const withHistory = useMemo(() => leases
+                .map(l => ({ lease: l, terms: buildTermline(l) }))
+                .filter(x => x.terms.length > 0)
+                .sort((a, b) => b.terms.length - a.terms.length), [leases]);
+
+            const renewed = withHistory.filter(x => x.terms.length > 1);
+            const rates = renewed.flatMap(x => x.terms.map(t => t.rentChangeRate).filter(r => r !== null));
+            const avgRate = rates.length ? (rates.reduce((a, r) => a + r, 0) / rates.length) : null;
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div>
+                        <h2 className="text-2xl font-bold text-gray-800">재계약 이력</h2>
+                        <p className="text-sm text-gray-500 mt-1">
+                            계약 관리 화면의 <span className="font-bold">갱신 처리</span> 버튼을 누르면 현재 조건이 이력으로 넘어가고 새 조건을 입력합니다.
+                        </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <StatCard title="재계약 이력" value={`${renewed.length}건`} subtext="갱신 기록이 있는 물건" color="blue" />
+                        <StatCard title="평균 임차료 인상률" value={avgRate === null ? '-' : `${avgRate > 0 ? '+' : ''}${avgRate.toFixed(1)}%`} subtext="갱신 시점 기준 평균" color="orange" />
+                        <StatCard title="관리 물건" value={`${withHistory.length}건`} subtext="기간이 입력된 계약" color="indigo" />
+                    </div>
+
+                    {withHistory.length === 0 ? (
+                        <div className="glass-panel p-12 text-center text-gray-400 text-sm">계약기간이 입력된 계약이 없습니다.</div>
+                    ) : withHistory.map(({ lease, terms }) => (
+                        <div key={lease.id} className="glass-panel overflow-hidden">
+                            <div className="px-5 py-3 bg-gray-50 border-b flex flex-wrap items-center justify-between gap-2">
+                                <span className="font-bold text-gray-800">{lease.name}</span>
+                                <span className="text-xs text-gray-500">{terms.length}개 기간</span>
+                            </div>
+                            <div className="divide-y">
+                                {terms.map((t, i) => (
+                                    <div key={i} className="px-5 py-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                                        <span className="font-mono text-xs text-gray-500 w-48">{t.startDate || '-'} ~ {t.endDate || '-'}</span>
+                                        {t.current
+                                            ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">현재</span>
+                                            : <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-500">과거</span>}
+                                        <span className="text-gray-700">임차료 <span className="font-bold">{formatKrw(t.monthlyRent)}</span></span>
+                                        <span className="text-gray-500 text-xs">보증금 {formatKrw(t.deposit)}</span>
+                                        {t.rentChangeRate !== null && (
+                                            <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${t.rentChangeRate > 0 ? 'bg-red-50 text-red-600' : t.rentChangeRate < 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'}`}>
+                                                임차료 {t.rentChangeRate > 0 ? '+' : ''}{t.rentChangeRate.toFixed(1)}%
+                                            </span>
+                                        )}
+                                        {t.depositDiff !== null && t.depositDiff !== 0 && (
+                                            <span className="text-[11px] text-gray-400">보증금 {t.depositDiff > 0 ? '+' : ''}{t.depositDiff.toLocaleString()}원</span>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+
+        // --- 감사 로그 ---
+        function AuditLogPage({ auditLogs }) {
+            const [search, setSearch] = useState('');
+            const [action, setAction] = useState('all');
+
+            const filtered = useMemo(() => {
+                const q = search.trim().toLowerCase();
+                return [...auditLogs]
+                    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+                    .filter(log => {
+                        if (action !== 'all' && log.action !== action) return false;
+                        if (!q) return true;
+                        return [log.message, log.action, JSON.stringify(log.before || ''), JSON.stringify(log.after || '')]
+                            .join(' ').toLowerCase().includes(q);
+                    });
+            }, [auditLogs, search, action]);
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <div>
+                            <h2 className="text-2xl font-bold text-gray-800">감사 로그</h2>
+                            <p className="text-sm text-gray-500 mt-1">누가 언제 계약 정보를 바꿨는지 기록합니다. 최근 300건까지 표시됩니다.</p>
+                        </div>
+                        <span className="text-sm text-gray-500">{filtered.length}건</span>
+                    </div>
+
+                    <div className="glass-panel p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div className="md:col-span-2 relative">
+                            <input type="text" placeholder="내용 검색..." value={search} onChange={e => setSearch(e.target.value)}
+                                className="w-full pl-8 pr-3 py-2 text-sm border rounded bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                            <span className="absolute left-2.5 top-2.5 text-gray-400"><Icons.Search /></span>
+                        </div>
+                        <select value={action} onChange={e => setAction(e.target.value)} className="border rounded px-3 py-2 text-sm bg-white">
+                            <option value="all">전체 작업</option>
+                            {Object.entries(AUDIT_ACTIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                        </select>
+                    </div>
+
+                    <div className="glass-panel overflow-hidden">
+                        {filtered.length === 0 ? (
+                            <p className="p-10 text-center text-gray-400 text-sm">
+                                {auditLogs.length === 0 ? '아직 기록이 없습니다.' : '조건에 맞는 기록이 없습니다.'}
+                            </p>
+                        ) : (
+                            <div className="divide-y max-h-[640px] overflow-y-auto custom-scroll">
+                                {filtered.slice(0, 300).map(log => {
+                                    const act = AUDIT_ACTIONS[log.action] || { label: log.action || '-', cls: 'bg-gray-100 text-gray-600' };
+                                    const changes = diffAuditSnapshots(log.before, log.after);
+                                    return (
+                                        <div key={log.id} className="px-5 py-4 hover:bg-gray-50">
+                                            <div className="flex flex-wrap items-center gap-2 text-sm">
+                                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${act.cls}`}>{act.label}</span>
+                                                <span className="text-gray-800">{log.message || '-'}</span>
+                                                <span className="ml-auto text-xs text-gray-400 font-mono">
+                                                    {log.createdAt ? new Date(log.createdAt).toLocaleString('ko-KR') : '-'}
+                                                </span>
+                                            </div>
+                                            {changes.length > 0 && (
+                                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                                    {changes.map(c => (
+                                                        <span key={c.key} className="text-[11px] bg-gray-50 border rounded px-2 py-1 text-gray-600">
+                                                            <span className="text-gray-400">{c.label}</span>{' '}
+                                                            <span className="line-through text-gray-400">{c.from}</span>
+                                                            <span className="mx-1 text-gray-300">→</span>
+                                                            <span className="font-medium text-gray-800">{c.to}</span>
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
         // --- 환경설정 ---
         function SettingsPage({ isDemoMode }) {
             return (
@@ -791,6 +1253,8 @@
             const { services, user, errorMsg } = useFirebase();
             const [activeTab, setActiveTab] = useState('dashboard');
             const [leases, setLeases] = useState([]);
+            const [auditLogs, setAuditLogs] = useState([]);
+            const [renewTarget, setRenewTarget] = useState(null);
             const [loading, setLoading] = useState(true);
             const [isDemoMode, setIsDemoMode] = useState(false);
 
@@ -802,36 +1266,57 @@
                     (snap) => { setLeases(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
                     (err) => { if (err.code === 'permission-denied') setIsDemoMode(true); setLoading(false); }
                 );
-                return () => unsub();
+                const unsubLogs = onSnapshot(leaseCollection(services.db, 'auditLogs'),
+                    (snap) => setAuditLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+                    () => {}
+                );
+                return () => { unsub(); unsubLogs(); };
             }, [services, user, isDemoMode]);
 
-            const handleAdd = async (data) => {
-                const payload = { ...data, createdAt: new Date().toISOString() };
+            const addAuditLog = async (action, message, before, after) => {
+                const log = { action, message, before: before || null, after: after || null, createdAt: new Date().toISOString() };
                 if (isDemoMode) {
-                    setLeases(prev => [...prev, { ...payload, id: 'local_' + Date.now() }]);
+                    setAuditLogs(prev => [{ id: 'local_log_' + Date.now(), ...log }, ...prev].slice(0, 300));
                     return;
                 }
                 try {
                     const { addDoc, leaseCollection } = window.firebaseModules;
-                    await addDoc(leaseCollection(services.db, 'leases'), payload);
-                } catch (e) {
-                    console.error('lease add failed', e);
-                    alert('저장에 실패했습니다. Firestore 규칙을 확인하세요.');
+                    await addDoc(leaseCollection(services.db, 'auditLogs'), log);
+                } catch (e) { console.warn('audit log write failed', e); }
+            };
+
+            const handleAdd = async (data) => {
+                const payload = { ...data, history: [], createdAt: new Date().toISOString() };
+                if (isDemoMode) {
+                    setLeases(prev => [...prev, { ...payload, id: 'local_' + Date.now() }]);
+                } else {
+                    try {
+                        const { addDoc, leaseCollection } = window.firebaseModules;
+                        await addDoc(leaseCollection(services.db, 'leases'), payload);
+                    } catch (e) {
+                        console.error('lease add failed', e);
+                        alert('저장에 실패했습니다. Firestore 규칙을 확인하세요.');
+                        return;
+                    }
                 }
+                await addAuditLog('add', `${data.name} 등록`, null, snapshotForAudit(payload));
             };
 
             const handleUpdate = async (id, data) => {
+                const before = snapshotForAudit(leases.find(l => l.id === id));
                 if (isDemoMode) {
                     setLeases(prev => prev.map(l => l.id === id ? { ...l, ...data } : l));
-                    return;
+                } else {
+                    try {
+                        const { updateDoc, leaseDoc } = window.firebaseModules;
+                        await updateDoc(leaseDoc(services.db, 'leases', id), { ...data, updatedAt: new Date().toISOString() });
+                    } catch (e) {
+                        console.error('lease update failed', e);
+                        alert('수정에 실패했습니다.');
+                        return;
+                    }
                 }
-                try {
-                    const { updateDoc, leaseDoc } = window.firebaseModules;
-                    await updateDoc(leaseDoc(services.db, 'leases', id), { ...data, updatedAt: new Date().toISOString() });
-                } catch (e) {
-                    console.error('lease update failed', e);
-                    alert('수정에 실패했습니다.');
-                }
+                await addAuditLog('update', `${data.name} 수정`, before, snapshotForAudit(data));
             };
 
             const handleDelete = async (id) => {
@@ -839,15 +1324,60 @@
                 if (!confirm(`'${target?.name || id}' 계약을 삭제합니다. 계속하시겠습니까?`)) return;
                 if (isDemoMode) {
                     setLeases(prev => prev.filter(l => l.id !== id));
+                } else {
+                    try {
+                        const { deleteDoc, leaseDoc } = window.firebaseModules;
+                        await deleteDoc(leaseDoc(services.db, 'leases', id));
+                    } catch (e) {
+                        console.error('lease delete failed', e);
+                        alert('삭제에 실패했습니다.');
+                        return;
+                    }
+                }
+                await addAuditLog('del', `${target?.name || id} 삭제`, snapshotForAudit(target), null);
+            };
+
+            // 갱신 처리: 현재 조건을 history 로 밀어 넣고 새 조건으로 교체한다.
+            const handleRenew = async (form) => {
+                const lease = renewTarget;
+                if (!lease) return;
+                if (form.startDate && form.endDate && form.startDate > form.endDate) {
+                    alert('시작일이 종료일보다 늦습니다.');
                     return;
                 }
-                try {
-                    const { deleteDoc, leaseDoc } = window.firebaseModules;
-                    await deleteDoc(leaseDoc(services.db, 'leases', id));
-                } catch (e) {
-                    console.error('lease delete failed', e);
-                    alert('삭제에 실패했습니다.');
+                const archived = {
+                    id: 'term_' + Date.now(),
+                    startDate: lease.startDate || '', endDate: lease.endDate || '',
+                    deposit: num(lease.deposit), monthlyRent: num(lease.monthlyRent),
+                    maintenanceFee: num(lease.maintenanceFee), area: Number(lease.area) || 0,
+                    recordedAt: new Date().toISOString(),
+                };
+                const next = {
+                    startDate: form.startDate, endDate: form.endDate,
+                    deposit: num(form.deposit), monthlyRent: num(form.monthlyRent), maintenanceFee: num(form.maintenanceFee),
+                    history: [...getHistory(lease), archived],
+                    renewalStatus: 'renew',
+                    updatedAt: new Date().toISOString(),
+                };
+
+                if (isDemoMode) {
+                    setLeases(prev => prev.map(l => l.id === lease.id ? { ...l, ...next } : l));
+                } else {
+                    try {
+                        const { updateDoc, leaseDoc } = window.firebaseModules;
+                        await updateDoc(leaseDoc(services.db, 'leases', lease.id), next);
+                    } catch (e) {
+                        console.error('lease renew failed', e);
+                        alert('갱신 처리에 실패했습니다.');
+                        return;
+                    }
                 }
+                const prevRent = num(lease.monthlyRent);
+                const rate = prevRent > 0 ? (((num(form.monthlyRent) - prevRent) / prevRent) * 100).toFixed(1) : null;
+                await addAuditLog('renew',
+                    `${lease.name} 갱신 처리${rate !== null ? ` (임차료 ${rate > 0 ? '+' : ''}${rate}%)` : ''}`,
+                    snapshotForAudit(lease), snapshotForAudit({ ...lease, ...next }));
+                setRenewTarget(null);
             };
 
             const handleDownloadOpsReport = () => {
@@ -896,6 +1426,7 @@
             return (
                 <div className="flex h-screen overflow-hidden bg-[#f3f4f6] flex-col">
                     {isDemoMode && <SetupBanner />}
+                    {renewTarget && <RenewModal lease={renewTarget} onClose={() => setRenewTarget(null)} onSubmit={handleRenew} />}
                     <div className="flex flex-1 overflow-hidden">
                         <aside className="w-64 bg-slate-900 text-white hidden md:flex flex-col shadow-2xl z-20">
                             <div className="p-6 border-b border-slate-800 font-bold text-blue-400 text-xl tracking-tight">임대차계약</div>
@@ -919,7 +1450,11 @@
                                 <div className="max-w-7xl mx-auto">
                                     {activeTab === 'dashboard' && <DashboardPage leases={leases} onDownloadReport={handleDownloadOpsReport} />}
                                     {activeTab === 'renewals' && <RenewalSchedulePage leases={leases} />}
-                                    {activeTab === 'leases' && <LeaseManagement leases={leases} onAdd={handleAdd} onUpdate={handleUpdate} onDelete={handleDelete} />}
+                                    {activeTab === 'analysis' && <AnalysisPage leases={leases} />}
+                                    {activeTab === 'leases' && <LeaseManagement leases={leases} onAdd={handleAdd} onUpdate={handleUpdate} onDelete={handleDelete} onRenew={setRenewTarget} />}
+                                    {activeTab === 'lessors' && <LessorPage leases={leases} />}
+                                    {activeTab === 'history' && <HistoryPage leases={leases} />}
+                                    {activeTab === 'audit' && <AuditLogPage auditLogs={auditLogs} />}
                                     {activeTab === 'settings' && <SettingsPage isDemoMode={isDemoMode} />}
                                 </div>
                             )}
