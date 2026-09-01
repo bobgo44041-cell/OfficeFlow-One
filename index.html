@@ -1394,6 +1394,13 @@
         width: 160px;
       }
 
+      .board-col-views {
+        width: 76px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+      }
+
       .board-col-date,
       .board-table td.board-col-date,
       .board-table th.board-col-date {
@@ -3957,6 +3964,7 @@
             createdAtMs: Number(data.createdAtMs || 0),
             pinned: Boolean(data.pinned),
             isPrivate: Boolean(data.isPrivate),
+            viewCount: Number(data.viewCount || 0),
             replies: normalizeBoardReplies(data.replies),
           };
         }
@@ -3981,6 +3989,70 @@
         // 답글은 게시글 문서의 replies 배열에 저장한다.
         // 기존 ofw_board_posts update 규칙이 운영자와 작성자를 이미 허용하므로
         // Firestore 규칙을 추가로 바꾸지 않아도 동작한다.
+        // 조회수는 같은 브라우저에서 일정 시간 안에는 다시 세지 않는다.
+        // 글을 열 때마다 올라가면 숫자가 의미를 잃는다.
+        const BOARD_VIEW_STORAGE_KEY = "ofw_board_viewed";
+        const BOARD_VIEW_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+        function readViewedPosts() {
+          try {
+            const raw = window.localStorage.getItem(BOARD_VIEW_STORAGE_KEY);
+            const parsed = raw ? JSON.parse(raw) : {};
+            return parsed && typeof parsed === "object" ? parsed : {};
+          } catch (error) {
+            return {};
+          }
+        }
+
+        function shouldCountBoardView(postId) {
+          const viewed = readViewedPosts();
+          const last = Number(viewed[postId] || 0);
+          return !last || Date.now() - last > BOARD_VIEW_WINDOW_MS;
+        }
+
+        function markBoardViewed(postId) {
+          try {
+            const viewed = readViewedPosts();
+            const now = Date.now();
+            // 오래된 기록은 정리해 저장소가 무한정 커지지 않게 한다.
+            Object.keys(viewed).forEach((key) => {
+              if (now - Number(viewed[key] || 0) > BOARD_VIEW_WINDOW_MS) delete viewed[key];
+            });
+            viewed[postId] = now;
+            window.localStorage.setItem(BOARD_VIEW_STORAGE_KEY, JSON.stringify(viewed));
+          } catch (error) {}
+        }
+
+        async function incrementBoardView(post) {
+          if (!post?.id) return;
+          if (isBoardPostOwnedByCurrentUser(post)) return; // 작성자 본인 조회는 세지 않는다
+          if (!shouldCountBoardView(post.id)) return;
+          markBoardViewed(post.id);
+
+          setState((prev) => ({
+            ...prev,
+            apps: {
+              ...prev.apps,
+              board: {
+                ...prev.apps.board,
+                posts: prev.apps.board.posts.map((item) =>
+                  item.id === post.id ? { ...item, viewCount: Number(item.viewCount || 0) + 1 } : item
+                ),
+              },
+            },
+          }));
+
+          if (!firebaseServices.db || !firebaseServices.auth?.currentUser) return;
+          try {
+            await firebaseServices.db
+              .collection(BOARD_COLLECTION)
+              .doc(post.id)
+              .update({ viewCount: firebase.firestore.FieldValue.increment(1) });
+          } catch (error) {
+            console.warn("Board view count update failed:", error);
+          }
+        }
+
         function canReplyToBoardPost(post) {
           if (!state.session.authenticated) return false;
           return state.session.role === "owner" || isBoardPostOwnedByCurrentUser(post);
@@ -4280,6 +4352,7 @@
             ["제목", ""],
             ["작성자", "board-col-author"],
             ["작성일", "board-col-date"],
+            ["조회", "board-col-views"],
           ].forEach(([label, className]) => {
             const th = document.createElement("th");
             th.textContent = label;
@@ -4328,6 +4401,7 @@
             }
             titleButton.addEventListener("click", () => {
               if (!canOpenBoardPost(post)) return;
+              void incrementBoardView(post);
               setState((prev) => ({
                 ...prev,
                 apps: {
@@ -4350,7 +4424,11 @@
             dateTd.className = "board-col-date";
             dateTd.textContent = post.createdAt;
 
-            tr.append(numberTd, categoryTd, titleTd, authorTd, dateTd);
+            const viewsTd = document.createElement("td");
+            viewsTd.className = "board-col-views";
+            viewsTd.textContent = Number(post.viewCount || 0).toLocaleString();
+
+            tr.append(numberTd, categoryTd, titleTd, authorTd, dateTd, viewsTd);
             tbody.appendChild(tr);
           });
 
@@ -4556,6 +4634,7 @@
               createdAtMs: now.getTime(),
               pinned: state.session.role === "owner" ? pinInput.checked : false,
               isPrivate: categorySelect.value === "질문" ? privateInput.checked : false,
+              viewCount: 0,
             };
 
             if (firebaseServices.db && firebaseServices.auth?.currentUser) {
@@ -4616,7 +4695,8 @@
             post.pinned ? createChip("고정 공지") : createChip("일반 글"),
             post.isPrivate ? createChip("비공개") : createChip("공개"),
             createChip("작성자 " + post.author),
-            createChip(post.createdAt)
+            createChip(post.createdAt),
+            createChip("조회 " + Number(post.viewCount || 0).toLocaleString())
           );
 
           const content = document.createElement("div");

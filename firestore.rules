@@ -29,6 +29,12 @@ service cloud.firestore {
         signedIn() &&
         resource.data.authorEmail == request.auth.token.email &&
         request.resource.data.authorEmail == request.auth.token.email
+      ) || (
+        // 조회수만 1 올리는 것은 누구나 허용한다.
+        // 다른 필드는 함께 바꿀 수 없고, 증가폭도 1로 제한된다.
+        signedIn() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewCount']) &&
+        request.resource.data.viewCount == resource.data.get('viewCount', 0) + 1
       );
       allow delete: if isAdmin() || (
         signedIn() &&
