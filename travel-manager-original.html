@@ -26,14 +26,14 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { getStorage, ref, uploadBytes, uploadString, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+        import { getStorage, ref, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
 
         // 전역 스코프에 Firebase 함수 노출
         window.firebaseModules = {
             initializeApp, getAuth, signInWithCustomToken, onAuthStateChanged,
             getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, serverTimestamp,
-            getStorage, ref, uploadBytes, uploadString, getDownloadURL, deleteObject, getAnalytics
+            getStorage, ref, deleteObject, getAnalytics
         };
     </script>
 
@@ -177,7 +177,7 @@
         // ---------------------------------------------------------
         const { initializeApp, getAuth, signInWithCustomToken, onAuthStateChanged,
                 getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, serverTimestamp,
-                getStorage, ref, uploadBytes, uploadString, getDownloadURL, deleteObject, getAnalytics } = window.firebaseModules;
+                getStorage, ref, deleteObject, getAnalytics } = window.firebaseModules;
 
         // [수정됨] 하이브리드 설정 적용
         const OFFICEFLOW_STORAGE_KEY = 'officeflow-one-embed-session';
@@ -697,7 +697,6 @@
                 if (latestReticketing?.requestedEndDate && latestReticketing.requestedEndDate !== trip.endDate) alerts.push('재발권 요청 일정과 현재 운영 일정이 다릅니다.');
                 if (passportDays < 180) alerts.push('여권 만료가 6개월 이내입니다.');
                 if (trip.endDate && trip.endDate < getLocalDateString() && trip.ticketingStatus !== 'completed' && trip.ticketingStatus !== 'cancelled') alerts.push('귀국일이 지났는데 상태가 완료되지 않았습니다.');
-                if (!trip.documents?.length) alerts.push('첨부 문서가 없습니다.');
                 return alerts;
             };
             const getRecentOptions = (field, max = 8) => {
@@ -747,12 +746,10 @@
                     const days = getDaysRemaining(t.startDate);
                     return days >= 0 && days <= 7 && t.ticketingStatus !== 'cancelled';
                 });
-                const missingDocs = trips.filter(t => !t.documents?.length && t.ticketingStatus !== 'cancelled');
                 const actionQueues = [
                     { title: '이번 주 출국', count: upcomingTrips.length, color: 'blue', icon: 'fa-plane-departure', badge: 'blue', iconClass: 'bg-blue-50 text-blue-600', action: () => setView('trips') },
                     { title: '재발권 필요', count: urgentChanges.length, color: 'orange', icon: 'fa-arrows-rotate', badge: 'orange', iconClass: 'bg-orange-50 text-orange-600', action: () => setView('trips') },
-                    { title: '여권 갱신 필요', count: warningEmps.length, color: 'red', icon: 'fa-passport', badge: 'red', iconClass: 'bg-red-50 text-red-600', action: () => setView('employees') },
-                    { title: '첨부 누락 출장', count: missingDocs.length, color: 'yellow', icon: 'fa-paperclip', badge: 'yellow', iconClass: 'bg-amber-50 text-amber-600', action: () => setView('trips') }
+                    { title: '여권 갱신 필요', count: warningEmps.length, color: 'red', icon: 'fa-passport', badge: 'red', iconClass: 'bg-red-50 text-red-600', action: () => setView('employees') }
                 ];
                 const monthlyData = filteredTripsByYear.reduce((acc, t) => {
                     if (!t.startDate) return acc;
@@ -1117,7 +1114,6 @@
                             {[
                                 ['이번 주 출국', trips.filter(t => { const d = getDaysRemaining(t.startDate); return d >= 0 && d <= 7; }).length],
                                 ['재발권 필요', trips.filter(t => ['change_req', 'rebooking'].includes(t.ticketingStatus)).length],
-                                ['첨부 누락', trips.filter(t => !t.documents?.length && t.ticketingStatus !== 'cancelled').length],
                                 ['완료 미처리', trips.filter(t => t.endDate < getLocalDateString() && !['completed', 'cancelled'].includes(t.ticketingStatus)).length]
                             ].map(([label, count]) => <div key={label} className="section-shell rounded-2xl p-4"><div className="text-xs text-slate-500 uppercase">{label}</div><div className="text-2xl font-bold text-slate-800 mt-1">{count}</div></div>)}
                         </div>
@@ -1304,11 +1300,7 @@
                         items: trips.filter(t => ['change_req', 'rebooking'].includes(t.ticketingStatus)),
                         empty: '재발권 처리 건이 없습니다.'
                     },
-                    {
-                        title: '첨부 누락',
-                        items: trips.filter(t => !t.documents?.length && t.ticketingStatus !== 'cancelled'),
-                        empty: '첨부 누락 건이 없습니다.'
-                    },
+
                     {
                         title: '완료 미처리',
                         items: trips.filter(t => t.endDate < getLocalDateString() && !['completed', 'cancelled'].includes(t.ticketingStatus)),
@@ -1579,13 +1571,6 @@
                     };
                     setCustomTemplates(prev => [template, ...prev].slice(0, 8));
                 };
-                const handleFileChange = (e) => {
-                    const file = e.target.files[0];
-                    if(!file) return;
-                    if(file.size > 5 * 1024 * 1024) return alert("5MB 이하만 업로드 가능");
-                    setDocuments(prev => [...prev, { id: Date.now() + Math.random(), name: file.name, type: 'E-Ticket', date: getLocalDateString(), file }]);
-                    e.target.value = '';
-                };
                 const addChangeLog = () => {
                     if(!newChange.date || !newChange.note) return alert("입력 필요");
                     setChangeLogs(prev => [...prev, newChange]);
@@ -1601,15 +1586,8 @@
                 const handleSubmit = async (e) => {
                     e.preventDefault();
                     try {
-                        const uploadedDocuments = await Promise.all(documents.map(async (docItem) => {
-                            const storagePath = `artifacts/${appId}/trip_docs/${data?.id || 'draft'}/${Date.now()}_${docItem.name}`;
-                            const storageRef = ref(storage, storagePath);
-                            if (docItem.file) await uploadBytes(storageRef, docItem.file);
-                            else if (docItem.data && !docItem.url) await uploadString(storageRef, docItem.data, 'data_url');
-                            else return docItem;
-                            const url = await getDownloadURL(storageRef);
-                            return { id: docItem.id, name: docItem.name, type: docItem.type, date: docItem.date, url, storagePath };
-                        }));
+                        // 파일 업로드는 사용하지 않는다. 이미 저장된 첨부 정보만 그대로 넘긴다.
+                        const uploadedDocuments = documents;
                         await Promise.all(removedDocuments.filter(d => d?.storagePath).map(d => deleteObject(ref(storage, d.storagePath)).catch(() => null)));
                         await onSave({
                             empId: formState.empId,
@@ -1762,8 +1740,8 @@
                                     <div className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-6">
                                         <div className="space-y-6">
                                             <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 flex flex-col">
-                                                <div className="flex justify-between items-center mb-3"><h4 className="font-bold text-slate-700"><i className="fas fa-folder-open mr-2"></i> 문서 보관함</h4><label className="cursor-pointer bg-slate-200 px-3 py-1 rounded text-xs font-bold"><i className="fas fa-upload mr-1"></i> 파일 선택<input type="file" className="hidden" onChange={handleFileChange} /></label></div>
-                                                <div className="space-y-2 min-h-[120px]">{documents.map(d=><div key={d.id} className="bg-white border rounded p-2 flex justify-between items-center"><div className="flex items-center overflow-hidden"><i className={`fas ${d.name.toLowerCase().endsWith('.pdf')?'fa-file-pdf':'fa-file-image'} text-red-500 mr-2`}></i><span className="text-xs truncate">{d.name}</span>{d.file && <span className="ml-2 text-xxs text-amber-600 font-bold">업로드 대기</span>}</div><div className="flex gap-2">{(d.url || d.data) && <a href={d.url || d.data} download={d.name} className="text-blue-500"><i className="fas fa-download"></i></a>}<button type="button" onClick={()=>removeDocument(d)} className="text-red-400"><i className="fas fa-trash"></i></button></div></div>)}</div>
+                                                <div className="flex justify-between items-center mb-3"><h4 className="font-bold text-slate-700"><i className="fas fa-folder-open mr-2"></i> 문서 보관함</h4><span className="text-xxs text-slate-400">파일 업로드는 사용하지 않습니다</span></div>
+                                                <div className="space-y-2 min-h-[120px]">{documents.length === 0 && <p className="text-xs text-slate-400 py-6 text-center">보관된 문서가 없습니다.</p>}{documents.map(d=><div key={d.id} className="bg-white border rounded p-2 flex justify-between items-center"><div className="flex items-center overflow-hidden"><i className={`fas ${d.name.toLowerCase().endsWith('.pdf')?'fa-file-pdf':'fa-file-image'} text-red-500 mr-2`}></i><span className="text-xs truncate">{d.name}</span>{d.file && <span className="ml-2 text-xxs text-amber-600 font-bold">업로드 대기</span>}</div><div className="flex gap-2">{(d.url || d.data) && <a href={d.url || d.data} download={d.name} className="text-blue-500"><i className="fas fa-download"></i></a>}<button type="button" onClick={()=>removeDocument(d)} className="text-red-400"><i className="fas fa-trash"></i></button></div></div>)}</div>
                                             </div>
                                             <div className="bg-orange-50 border border-orange-100 rounded-xl p-4">
                                                 <div className="font-bold text-orange-800 mb-3">변경 이력</div>

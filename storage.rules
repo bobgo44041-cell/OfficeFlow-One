@@ -1,16 +1,10 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    function signedIn() {
-      return request.auth != null;
-    }
-
-    function ownsTravelApp(appId) {
-      return signedIn() && appId.matches('^ofw-travel-manager-' + request.auth.uid + '$');
-    }
-
-    match /artifacts/{appId}/trip_docs/{documentPath=**} {
-      allow read, write: if ownsTravelApp(appId);
+    // 파일 업로드 기능을 사용하지 않는다.
+    // 앱에서 업로드 UI 를 제거했고, 규칙에서도 모든 접근을 막는다.
+    match /{allPaths=**} {
+      allow read, write: if false;
     }
   }
 }

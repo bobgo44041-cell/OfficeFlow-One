@@ -96,24 +96,23 @@ service cloud.firestore {
 
 ### Firebase Storage Rules required before public deploy
 
+파일 업로드 기능을 사용하지 않는다. 앱에서 업로드 UI 를 제거했고,
+규칙에서도 모든 접근을 막는다.
+
 ```txt
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    function signedIn() {
-      return request.auth != null;
-    }
-
-    function ownsTravelApp(appId) {
-      return signedIn() && appId.matches('^ofw-travel-manager-' + request.auth.uid + '$');
-    }
-
-    match /artifacts/{appId}/trip_docs/{documentPath=**} {
-      allow read, write: if ownsTravelApp(appId);
+    match /{allPaths=**} {
+      allow read, write: if false;
     }
   }
 }
 ```
+
+주의: 이 규칙은 SDK 를 통한 접근만 막는다. 과거에 업로드된 파일의
+다운로드 URL 은 토큰이 포함된 링크라 규칙과 무관하게 계속 열린다.
+완전히 차단하려면 Firebase Console 에서 해당 파일을 삭제해야 한다.
 
 ### Must-do before public launch
 - Publish the rules above in Firebase Console
