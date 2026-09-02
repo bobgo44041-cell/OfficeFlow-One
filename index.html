@@ -843,6 +843,52 @@
         gap: 10px;
       }
 
+      /* 인앱 브라우저(카카오톡 등)에서는 구글이 로그인을 막는다.
+         버튼을 누르기 전에 미리 알려준다. */
+      .inapp-warning {
+        margin-top: 20px;
+        padding: 14px 16px;
+        border-radius: 14px;
+        background: rgba(255, 244, 214, 0.94);
+        border: 1px solid rgba(180, 130, 20, 0.28);
+        color: #6b4a05;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .inapp-warning strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 13.5px;
+        color: #5a3d03;
+      }
+
+      .inapp-warning-actions {
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .inapp-warning-actions button {
+        flex: 1 1 auto;
+        min-height: 40px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        border: 1px solid rgba(180, 130, 20, 0.35);
+        background: #fff;
+        color: #6b4a05;
+        font-size: 12.5px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .inapp-warning-actions button.primary {
+        background: #8a5f06;
+        border-color: #8a5f06;
+        color: #fff;
+      }
+
       .social-button {
         display: inline-flex;
         align-items: center;
@@ -2645,6 +2691,14 @@
                 </article>
               </div>
               <div class="auth-hero-actions">
+                <div class="inapp-warning" id="inappWarning" role="alert" hidden>
+                  <strong>지금 브라우저에서는 Google 로그인이 막힙니다</strong>
+                  <span id="inappWarningText"></span>
+                  <div class="inapp-warning-actions">
+                    <button type="button" class="primary" id="inappOpenExternal" hidden>외부 브라우저로 열기</button>
+                    <button type="button" id="inappCopyUrl">주소 복사</button>
+                  </div>
+                </div>
                 <div class="social-stack" aria-label="소셜 로그인">
                   <button class="social-button" type="button" data-provider="google">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -3013,6 +3067,13 @@
         elements.socialButtons.forEach((button) => {
           button.addEventListener("click", () => handleSocialLogin(button.dataset.provider));
         });
+        document.getElementById("inappOpenExternal")?.addEventListener("click", () => {
+          if (!openInExternalBrowser()) void handleCopyCurrentUrl();
+        });
+        document.getElementById("inappCopyUrl")?.addEventListener("click", () => {
+          void handleCopyCurrentUrl();
+        });
+        renderInAppBrowserWarning();
         window.addEventListener("hashchange", syncRouteFromHash);
         document.addEventListener("click", handleDocumentClickForMenus);
         document.addEventListener("keydown", (event) => {
@@ -8130,54 +8191,169 @@
           return [...map.values()].sort((a, b) => a.email.localeCompare(b.email));
         }
 
-        function isEmbeddedBrowser() {
-          const ua = String(window.navigator.userAgent || "");
-          const markers = [
-            "KAKAOTALK",
-            "FBAN",
-            "FBAV",
-            "Instagram",
-            "Line/",
-            "NAVER",
-            "DaumApps",
-            "Electron",
-            "WebView",
-            "; wv)",
+        // 구글은 2021년부터 인앱 브라우저(WebView) 안에서의 OAuth 로그인을 막는다.
+        // (403 disallowed_useragent) Firebase 콘솔이나 서버 설정으로는 풀 수 없고,
+        // 어떤 브라우저로 들어왔는지 알아보고 외부 브라우저로 안내하는 수밖에 없다.
+        //
+        // UA 에 앱 이름이 찍히는 경우는 확실(confident)하게 막고,
+        // 이름 없는 웹뷰는 추정(heuristic)만 가능하므로 경고만 하고 시도는 허용한다.
+        // 추정이 틀렸을 때 멀쩡한 브라우저의 로그인까지 막지 않기 위해서다.
+        // 이벤트 바인딩 시점(스크립트 위쪽)에서 바로 호출되므로, const 가 아니라
+        // 호이스팅되는 함수로 둔다. const 로 두면 초기화 전 접근 오류가 난다.
+        function getEmbeddedAppMarkers() {
+          return [
+            { marker: "kakaotalk", name: "카카오톡" },
+            { marker: "kakaostory", name: "카카오스토리" },
+            { marker: "naver(", name: "네이버 앱" },
+            { marker: "naverapp", name: "네이버 앱" },
+            { marker: "daumapps", name: "다음 앱" },
+            { marker: "band/", name: "밴드" },
+            { marker: "instagram", name: "인스타그램" },
+            { marker: "fban", name: "페이스북" },
+            { marker: "fbav", name: "페이스북" },
+            { marker: "fb_iab", name: "페이스북" },
+            { marker: "fbios", name: "페이스북" },
+            { marker: "line/", name: "라인" },
+            { marker: "micromessenger", name: "위챗" },
+            { marker: "everytimeapp", name: "에브리타임" },
+            { marker: "trill", name: "틱톡" },
+            { marker: "musical_ly", name: "틱톡" },
+            { marker: "snapchat", name: "스냅챗" },
+            { marker: "twitter", name: "X(트위터)" },
+            { marker: "linkedinapp", name: "링크드인" },
+            { marker: "slack", name: "슬랙" },
+            { marker: "discord", name: "디스코드" },
+            { marker: "electron", name: "데스크톱 앱" },
+            { marker: "webview", name: "인앱 브라우저" },
+            { marker: "; wv)", name: "인앱 브라우저" },
           ];
-          return markers.some((marker) => ua.includes(marker));
         }
 
+        function detectEmbeddedBrowser() {
+          const lower = String(window.navigator.userAgent || "").toLowerCase();
+          const hit = getEmbeddedAppMarkers().find((entry) => lower.includes(entry.marker));
+          if (hit) return { embedded: true, confident: true, name: hit.name };
+
+          // iOS 인앱 웹뷰는 앱 이름을 안 남기는 경우가 많다. 사파리/크롬과 달리
+          // UA 끝에 "Safari/" 토큰이 붙지 않는 점으로 구분한다.
+          const isIOS = /iphone|ipad|ipod/.test(lower);
+          if (isIOS && lower.includes("applewebkit") && !lower.includes("safari/")) {
+            return { embedded: true, confident: false, name: "인앱 브라우저" };
+          }
+
+          // 안드로이드 WebView 는 크롬과 달리 "Version/x" 토큰을 함께 내보낸다.
+          if (lower.includes("android") && /version\/\d/.test(lower) && lower.includes("chrome/")) {
+            return { embedded: true, confident: false, name: "인앱 브라우저" };
+          }
+
+          return { embedded: false, confident: false, name: "" };
+        }
+
+        function isEmbeddedBrowser() {
+          return detectEmbeddedBrowser().embedded;
+        }
+
+        // 외부 브라우저를 강제로 열 수 있는 주소. 못 여는 환경이면 null.
         function getExternalBrowserOpenUrl() {
           const currentUrl = window.location.href;
-          const isAndroid = /Android/i.test(window.navigator.userAgent || "");
+          const lower = String(window.navigator.userAgent || "").toLowerCase();
           const protocol = String(window.location.protocol || "").replace(":", "");
-          if (!isAndroid || (protocol !== "http" && protocol !== "https")) {
-            return currentUrl;
+          if (protocol !== "http" && protocol !== "https") return null;
+
+          // 카카오톡은 iOS·안드로이드 모두 이 스킴으로 기본 브라우저를 연다.
+          if (lower.includes("kakaotalk")) {
+            return "kakaotalk://web/openExternal?url=" + encodeURIComponent(currentUrl);
           }
-          const sanitized = currentUrl.replace(/^https?:\/\//i, "");
-          return "intent://" + sanitized + "#Intent;scheme=" + protocol + ";package=com.android.chrome;end";
+          // 안드로이드는 intent 스킴으로 크롬을 지정해 열 수 있다.
+          if (lower.includes("android")) {
+            const sanitized = currentUrl.replace(/^https?:\/\//i, "");
+            return "intent://" + sanitized + "#Intent;scheme=" + protocol + ";package=com.android.chrome;end";
+          }
+          // iOS 의 다른 앱들은 밖에서 열도록 강제할 방법이 없다. 주소를 복사해 사파리에 붙여야 한다.
+          return null;
+        }
+
+        async function copyCurrentUrl() {
+          const url = window.location.href;
+          try {
+            if (window.navigator.clipboard?.writeText) {
+              await window.navigator.clipboard.writeText(url);
+              return true;
+            }
+          } catch (error) {
+            /* 인앱 브라우저는 clipboard API 를 막아둔 경우가 있어 아래로 넘어간다. */
+          }
+          try {
+            const field = document.createElement("textarea");
+            field.value = url;
+            field.setAttribute("readonly", "");
+            field.style.position = "fixed";
+            field.style.top = "-1000px";
+            document.body.appendChild(field);
+            field.select();
+            const copied = document.execCommand("copy");
+            document.body.removeChild(field);
+            return copied;
+          } catch (error) {
+            return false;
+          }
+        }
+
+        function openInExternalBrowser() {
+          const externalUrl = getExternalBrowserOpenUrl();
+          if (!externalUrl) return false;
+          try {
+            window.location.href = externalUrl;
+            return true;
+          } catch (error) {
+            console.error("Failed to open external browser:", error);
+            return false;
+          }
+        }
+
+        async function handleCopyCurrentUrl() {
+          const copied = await copyCurrentUrl();
+          pushToast(
+            copied ? "주소를 복사했습니다" : "주소 복사 실패",
+            copied
+              ? "Chrome, Safari 같은 브라우저를 열고 주소창에 붙여넣어 주세요."
+              : "주소창의 주소를 직접 길게 눌러 복사한 뒤 다른 브라우저에 붙여넣어 주세요."
+          );
         }
 
         function promptOpenInExternalBrowser() {
-          const currentUrl = window.location.href;
           const externalUrl = getExternalBrowserOpenUrl();
-          const shouldOpen = window.confirm(
-            "현재 브라우저에서는 Google 로그인이 차단됩니다.\n\n카카오톡/사내 앱/임베디드 브라우저가 아니라 Chrome, Edge, Safari 같은 외부 브라우저에서 다시 열어야 합니다.\n\n가능하면 외부 브라우저로 열어보시겠습니까?"
-          );
-          if (!shouldOpen) {
-            pushToast(
-              "외부 브라우저 필요",
-              "현재 주소를 Chrome, Edge, Safari 같은 기본 브라우저에 직접 붙여 열어주세요."
+          if (externalUrl) {
+            const shouldOpen = window.confirm(
+              "지금 브라우저(카카오톡 등 인앱 브라우저)에서는 Google 로그인이 차단됩니다.\n\nChrome, Safari 같은 외부 브라우저로 열어드릴까요?"
             );
-            return;
+            if (shouldOpen && openInExternalBrowser()) return;
           }
+          void handleCopyCurrentUrl();
+        }
 
-          try {
-            window.location.href = externalUrl;
-          } catch (error) {
-            console.error("Failed to open external browser:", error);
-            window.open(currentUrl, "_blank", "noopener,noreferrer");
+        // 로그인 화면에 미리 안내를 띄운다. 버튼을 눌러 구글 오류 화면을
+        // 보고 나서야 알게 되는 것보다 낫다.
+        function renderInAppBrowserWarning() {
+          const box = document.getElementById("inappWarning");
+          if (!box) return;
+          const info = detectEmbeddedBrowser();
+          box.hidden = !info.embedded;
+          if (!info.embedded) return;
+
+          const textNode = document.getElementById("inappWarningText");
+          const openButton = document.getElementById("inappOpenExternal");
+          const canOpen = Boolean(getExternalBrowserOpenUrl());
+
+          if (textNode) {
+            const where = info.confident ? `${info.name} 안에서 열렸습니다.` : "앱 안에 내장된 브라우저로 보입니다.";
+            textNode.textContent =
+              `${where} Google 정책상 이런 브라우저에서는 로그인이 되지 않습니다(403 오류). ` +
+              (canOpen
+                ? "아래 버튼으로 외부 브라우저에서 다시 열어주세요."
+                : "우측 하단 메뉴에서 'Safari로 열기' 또는 '다른 브라우저로 열기'를 선택하거나, 주소를 복사해 브라우저에 붙여넣어 주세요.");
           }
+          if (openButton) openButton.hidden = !canOpen;
         }
 
         async function handleSocialLogin(provider) {
@@ -8189,10 +8365,13 @@
             );
             return;
           }
-          if (isEmbeddedBrowser()) {
+          const embedInfo = detectEmbeddedBrowser();
+          if (embedInfo.embedded && embedInfo.confident) {
             promptOpenInExternalBrowser();
             return;
           }
+          // 앱 이름 없이 추정만 한 경우에는 감지가 틀렸을 수 있어 그대로 시도한다.
+          // 실제로 막히면 로그인 화면 위쪽 안내 배너가 이유를 알려준다.
           if (!firebaseServices.enabled || !firebaseServices.auth || !window.firebase?.auth) {
             pushToast("Google 로그인 불가", "Firebase Auth 초기화에 실패했습니다.");
             return;
