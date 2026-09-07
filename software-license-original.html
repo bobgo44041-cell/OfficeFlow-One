@@ -216,7 +216,12 @@
 
         const downloadCSV = (data, filename) => {
             const bom = "\uFEFF";
-            const csvContent = bom + data.map(e => e.join(",")).join("\n");
+            // \uBD80\uC11C\uBA85 \uB4F1\uC5D0 \uC27C\uD45C\uB098 \uB530\uC634\uD45C\uAC00 \uB4E4\uC5B4\uAC00\uB3C4 \uC5F4\uC774 \uBC00\uB9AC\uC9C0 \uC54A\uAC8C \uAC10\uC2FC\uB2E4.
+            const escape = (cell) => {
+                const value = String(cell === undefined || cell === null ? '' : cell);
+                return /[",\n]/.test(value) ? '"' + value.replace(/"/g, '""') + '"' : value;
+            };
+            const csvContent = bom + data.map(e => e.map(escape).join(",")).join("\n");
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
@@ -260,6 +265,27 @@
 
             return lines.map(parseLine);
         };
+
+        // 엑셀에서 "CSV(쉼표로 분리)"로 저장하면 한국어 윈도우는 UTF-8 이 아니라
+        // CP949(EUC-KR)로 쓴다. UTF-8 로 먼저 읽어 보고 깨진 문자가 나오면 EUC-KR 로 다시 읽는다.
+        const decodeCsvBuffer = (buffer) => {
+            const bytes = new Uint8Array(buffer);
+            const hasBom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+            const utf8 = new TextDecoder('utf-8').decode(bytes);
+            if (hasBom || !utf8.includes('�')) return utf8;
+            try {
+                return new TextDecoder('euc-kr').decode(bytes);
+            } catch (e) {
+                return utf8;
+            }
+        };
+
+        const readCsvFile = async (file) => decodeCsvBuffer(await file.arrayBuffer());
+
+        // 같은 사람인지 판단하는 기준. 이름과 부서를 함께 본다
+        // (동명이인이 다른 부서에 있을 수 있다).
+        const userKey = (name, dept) =>
+            `${String(name || '').trim().toLowerCase()}||${String(dept || '').trim().toLowerCase()}`;
 
         const getSortClass = (key, currentConfig) => {
             if (currentConfig.key !== key) return "sort-icon cursor-pointer hover:bg-gray-100 select-none";
@@ -686,6 +712,9 @@
             const [form, setForm] = useState({ name: '', dept: '' });
             const [editId, setEditId] = useState(null);
             const [bulkText, setBulkText] = useState('');
+            const [bulkFilePreview, setBulkFilePreview] = useState(null);
+            const [bulkImporting, setBulkImporting] = useState(false);
+            const [bulkFileKey, setBulkFileKey] = useState(0);
             const [mode, setMode] = useState('single');
             const [searchTerm, setSearchTerm] = useState('');
             const [userSort, setUserSort] = useState({ key: 'name', direction: 'asc' });
@@ -717,14 +746,96 @@
                 if(editId) { onUpdate(editId, form); setEditId(null); } else onAdd(form);
                 setForm({ name: '', dept: '' });
             };
-            const handleBulk = async () => {
-                const lines = bulkText.split('\n');
-                for(let line of lines) { const [n,d] = line.split(/[,\t]/).map(s=>s.trim()); if(n) await onAdd({name:n, dept:d||''}); }
-                setBulkText(''); setMode('single');
+            // 이미 등록된 사람을 다시 넣지 않도록 기준 키를 미리 만들어 둔다.
+            const existingKeys = useMemo(
+                () => new Set(users.map(u => userKey(u.name, u.dept))),
+                [users]
+            );
+
+            // 이름/부서 목록에서 새로 등록할 사람만 골라낸다.
+            const pickNewUsers = (candidates) => {
+                const seen = new Set();
+                const add = [], dupInFile = [], dupExisting = [];
+                candidates.forEach(({ name, dept }) => {
+                    if (!name) return;
+                    const key = userKey(name, dept);
+                    if (seen.has(key)) { dupInFile.push(name); return; }
+                    seen.add(key);
+                    if (existingKeys.has(key)) { dupExisting.push(name); return; }
+                    add.push({ name, dept });
+                });
+                return { add, dupInFile, dupExisting };
             };
+
+            const handleBulk = async () => {
+                const candidates = bulkText.split('\n').map(line => {
+                    const [n, d] = line.split(/[,\t]/).map(s => (s || '').trim());
+                    return { name: n || '', dept: d || '' };
+                });
+                const { add, dupInFile, dupExisting } = pickNewUsers(candidates);
+                if (add.length === 0) {
+                    alert(dupExisting.length + dupInFile.length > 0
+                        ? '모두 이미 등록된 인원입니다.'
+                        : '등록할 내용이 없습니다.');
+                    return;
+                }
+                setBulkImporting(true);
+                for (const u of add) await onAdd(u);
+                setBulkImporting(false);
+                setBulkText(''); setMode('single');
+                const skipped = dupExisting.length + dupInFile.length;
+                alert(`${add.length}명을 등록했습니다.` + (skipped ? `\n중복 ${skipped}명은 건너뛰었습니다.` : ''));
+            };
+
             const handleDownload = () => {
                 const data = [["이름", "부서", "가입일"], ...sortedUsers.map(u => [u.name, u.dept, u.createdAt])];
                 downloadCSV(data, "users_backup.csv");
+            };
+
+            // 빈 양식. 예시 두 줄을 남겨 어떤 형식인지 바로 알 수 있게 한다.
+            const handleTemplateDownload = () => {
+                downloadCSV([
+                    ["이름", "부서"],
+                    ["홍길동", "경영지원팀"],
+                    ["김철수", "개발팀"],
+                    // 파일명은 영문으로 둔다. 크롬은 blob 다운로드에서 한글 파일명을
+                    // 무시하고 확장자 없는 'download' 로 저장해 버린다.
+                ], "user_import_template.csv");
+            };
+
+            const handleBulkFile = async (e) => {
+                const file = e.target.files?.[0] || null;
+                setBulkFilePreview(null);
+                if (!file) return;
+                try {
+                    const rows = parseCSV(await readCsvFile(file));
+                    if (rows.length < 2) throw new Error('데이터 행이 없습니다. 첫 줄은 헤더(이름, 부서)여야 합니다.');
+                    const headers = rows[0].map(h => String(h || '').trim());
+                    const nameIdx = headers.indexOf('이름');
+                    if (nameIdx < 0) throw new Error("헤더에 '이름' 컬럼이 없습니다. 양식 다운로드를 받아 사용하세요.");
+                    const deptIdx = headers.indexOf('부서');
+
+                    const candidates = rows.slice(1).map(r => ({
+                        name: String(r[nameIdx] || '').trim(),
+                        dept: deptIdx >= 0 ? String(r[deptIdx] || '').trim() : '',
+                    }));
+                    setBulkFilePreview({ ...pickNewUsers(candidates), fileName: file.name });
+                } catch (err) {
+                    setBulkFilePreview({ error: err.message });
+                }
+            };
+
+            const runBulkImport = async () => {
+                const preview = bulkFilePreview;
+                if (!preview || preview.error || !preview.add.length) return;
+                setBulkImporting(true);
+                for (const u of preview.add) await onAdd(u);
+                setBulkImporting(false);
+                setBulkFilePreview(null);
+                setBulkFileKey(k => k + 1);
+                setMode('single');
+                const skipped = preview.dupExisting.length + preview.dupInFile.length;
+                alert(`${preview.add.length}명을 등록했습니다.` + (skipped ? `\n중복 ${skipped}명은 건너뛰었습니다.` : ''));
             };
 
             return (
@@ -769,7 +880,65 @@
                                     {editId && <button onClick={()=>{setEditId(null); setForm({name:'',dept:''})}} className="w-full text-xs text-gray-400">취소</button>}
                                 </form>
                             ) : (
-                                <div className="space-y-4"><textarea className="w-full border rounded h-32 px-3 py-2 text-sm" placeholder="이름 [탭] 부서..." value={bulkText} onChange={e=>setBulkText(e.target.value)}/><button onClick={handleBulk} className="w-full bg-green-600 text-white py-2 rounded text-sm hover:bg-green-700">일괄 등록</button></div>
+                                <div className="space-y-5">
+                                    <div className="border rounded-lg p-4 bg-emerald-50 border-emerald-100">
+                                        <p className="text-xs font-bold text-emerald-800 mb-1">엑셀 파일로 등록</p>
+                                        <p className="text-[11px] text-emerald-700 mb-3">
+                                            양식을 받아 엑셀에서 채운 뒤 그대로 올리면 됩니다.
+                                            이미 등록된 인원은 자동으로 건너뜁니다.
+                                        </p>
+                                        <button type="button" onClick={handleTemplateDownload}
+                                            className="w-full flex items-center justify-center gap-1 bg-white border border-emerald-300 text-emerald-700 py-2 rounded text-xs font-bold hover:bg-emerald-100">
+                                            <Icons.Download /> 엑셀 양식 다운로드
+                                        </button>
+                                        <input key={bulkFileKey} type="file" accept=".csv,text/csv"
+                                            onChange={handleBulkFile}
+                                            className="w-full mt-2 text-[11px] border rounded p-2 bg-white" />
+
+                                        {bulkFilePreview && bulkFilePreview.error && (
+                                            <p className="mt-2 text-[11px] text-red-600">{bulkFilePreview.error}</p>
+                                        )}
+                                        {bulkFilePreview && !bulkFilePreview.error && (
+                                            <div className="mt-3 border rounded p-3 bg-white text-[11px] text-slate-600 space-y-1">
+                                                <p className="font-bold text-slate-700">
+                                                    새로 등록할 인원 {bulkFilePreview.add.length}명
+                                                </p>
+                                                {bulkFilePreview.add.length > 0 && (
+                                                    <p className="text-slate-500">
+                                                        {bulkFilePreview.add.slice(0, 6).map(u => u.name).join(', ')}
+                                                        {bulkFilePreview.add.length > 6 ? ` 외 ${bulkFilePreview.add.length - 6}명` : ''}
+                                                    </p>
+                                                )}
+                                                {bulkFilePreview.dupExisting.length > 0 && (
+                                                    <p className="text-amber-700">이미 등록됨 {bulkFilePreview.dupExisting.length}명 (건너뜀)</p>
+                                                )}
+                                                {bulkFilePreview.dupInFile.length > 0 && (
+                                                    <p className="text-amber-700">파일 안 중복 {bulkFilePreview.dupInFile.length}명 (건너뜀)</p>
+                                                )}
+                                                {bulkFilePreview.add.length === 0 && (
+                                                    <p className="text-slate-400">추가할 새 인원이 없습니다.</p>
+                                                )}
+                                            </div>
+                                        )}
+                                        <button type="button" onClick={runBulkImport}
+                                            disabled={!bulkFilePreview || bulkFilePreview.error || !bulkFilePreview.add.length || bulkImporting}
+                                            className="w-full mt-2 bg-emerald-600 text-white py-2 rounded text-xs font-bold hover:bg-emerald-700 disabled:opacity-40">
+                                            {bulkImporting ? '등록 중...' : '파일로 등록'}
+                                        </button>
+                                    </div>
+
+                                    <div>
+                                        <p className="text-xs font-bold text-gray-600 mb-1">직접 붙여넣기</p>
+                                        <p className="text-[11px] text-gray-400 mb-2">엑셀에서 두 열을 복사해 붙여넣어도 됩니다.</p>
+                                        <textarea className="w-full border rounded h-28 px-3 py-2 text-sm"
+                                            placeholder={'이름[탭]부서\n홍길동\t경영지원팀'}
+                                            value={bulkText} onChange={e=>setBulkText(e.target.value)}/>
+                                        <button onClick={handleBulk} disabled={bulkImporting}
+                                            className="w-full mt-2 bg-slate-700 text-white py-2 rounded text-sm hover:bg-slate-800 disabled:opacity-40">
+                                            {bulkImporting ? '등록 중...' : '붙여넣은 내용으로 등록'}
+                                        </button>
+                                    </div>
+                                </div>
                             )}
                         </div>
                         <div className="glass-panel flex-1 overflow-hidden">
@@ -1633,7 +1802,8 @@
                 if (!file) return;
 
                 try {
-                    const content = await file.text();
+                    // file.text() 는 UTF-8 로만 읽어 엑셀이 CP949 로 저장한 파일이 깨진다.
+                    const content = await readCsvFile(file);
                     const rows = parseCSV(content);
                     const preview = buildImportPreview(importType, rows);
                     setImportPreview(preview);
